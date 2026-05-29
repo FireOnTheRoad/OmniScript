@@ -1,0 +1,46 @@
+# ── 构建产物 ──
+out/
+dist/
+*.tsbuildinfo
+
+# ── 依赖 ──
+node_modules/
+
+# ── 环境 & 缓存 ──
+*.log
+*.log.*
+npm-debug.log*
+.cache/
+.eslintcache
+
+# ── 系统文件 ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── 编辑器 ──
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ── 设计文档 / 工具 ──
+.superpowers/
+
+# ── 环境变量 ──
+.env
+.env.local
+.env.*.local
+
+# ── 项目备份文件 ──
+*.bak
+
+# ── 打包相关 ──
+release/
+*.exe
+*.dmg
+*.AppImage
+*.snap
