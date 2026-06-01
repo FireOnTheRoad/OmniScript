@@ -18,10 +18,17 @@ const validInvokeChannels = [
   'workspace:set-path',
   'workspace:update-settings',
   'dialog:pick-workspace',
+  'dialog:pick-image',
   'project:load',
   'project:save',
   'project:new',
-  'project:remove-recent'
+  'project:remove-recent',
+  'asset:copy-to-project',
+  'asset:read',
+  'ai:get-config',
+  'ai:save-config',
+  'ai:generate-shots',
+  'ai:test-connection'
 ]
 
 const api = {

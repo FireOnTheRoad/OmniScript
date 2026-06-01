@@ -2,6 +2,7 @@
 out/
 dist/
 *.tsbuildinfo
+docs/
 
 # ── 依赖 ──
 node_modules/
@@ -34,6 +35,7 @@ desktop.ini
 .env
 .env.local
 .env.*.local
+ai.json
 
 # ── 项目备份文件 ──
 *.bak

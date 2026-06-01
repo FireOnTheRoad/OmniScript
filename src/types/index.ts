@@ -104,6 +104,22 @@ export interface AppSettings {
   aspectRatio: string
 }
 
+export interface AiConfig {
+  provider: 'openai' | 'anthropic' | 'deepseek'
+  apiUrl: string
+  apiKey: string
+  model: string
+}
+
+export interface AiShotField {
+  scene: string
+  camera: string
+  duration: number
+  transition: string
+  description: string
+  dialogue: string
+}
+
 export interface WorkspaceConfig {
   workspacePath: string
   lastProjectPath: string

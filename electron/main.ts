@@ -1,5 +1,7 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import { readFile, copyFile, mkdir } from 'fs/promises'
+import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { loadProject, saveProject, checkProjectExists, getProjectPath } from './ipc/project-handlers'
 import { startWatching, stopWatching, markWrite } from './ipc/file-watcher'
@@ -12,6 +14,13 @@ import {
   getDefaultWorkspacePath
 } from './ipc/workspace'
 import type { WorkspaceConfig } from '../src/types'
+import {
+  readAiConfig,
+  saveAiConfig,
+  callAiApi,
+  testAiConnection,
+  type AiConfig
+} from './aiService'
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
 app.commandLine.appendSwitch('no-sandbox')
@@ -253,6 +262,104 @@ function registerIpcHandlers(): void {
       return { success: true }
     } catch (err) {
       return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('dialog:pick-image', async () => {
+    const result = await dialog.showOpenDialog(mainWindow!, {
+      properties: ['openFile'],
+      title: '选择参考图片',
+      filters: [
+        { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'] }
+      ]
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true }
+    }
+    return { canceled: false, path: result.filePaths[0] }
+  })
+
+  ipcMain.handle('asset:copy-to-project', async (_event, sourcePath: string, projectPath: string, shotId: string) => {
+    try {
+      const assetsDir = join(projectPath, 'assets')
+      if (!existsSync(assetsDir)) {
+        await mkdir(assetsDir, { recursive: true })
+      }
+
+      const ext = sourcePath.split('.').pop() || 'jpg'
+      const timestamp = Date.now()
+      const fileName = `shot_${shotId}_${timestamp}.${ext}`
+      const destPath = join(assetsDir, fileName)
+
+      await copyFile(sourcePath, destPath)
+
+      return {
+        success: true,
+        relPath: `assets/${fileName}`
+      }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('asset:read', async (_event, projectPath: string, relPath: string) => {
+    try {
+      const fullPath = join(projectPath, relPath)
+      if (!existsSync(fullPath)) {
+        return { success: false, error: '文件不存在' }
+      }
+      const buffer = await readFile(fullPath)
+      const ext = relPath.split('.').pop()?.toLowerCase() || 'jpg'
+      const mimeMap: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+        gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp',
+        svg: 'image/svg+xml'
+      }
+      const mime = mimeMap[ext] || 'image/jpeg'
+      const base64 = buffer.toString('base64')
+      return { success: true, dataUrl: `data:${mime};base64,${base64}` }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('ai:get-config', async () => {
+    try {
+      const config = await readAiConfig(workspaceConfig!.workspacePath)
+      return config
+    } catch (err) {
+      return null
+    }
+  })
+
+  ipcMain.handle('ai:save-config', async (_event, config: AiConfig) => {
+    try {
+      await saveAiConfig(workspaceConfig!.workspacePath, config)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('ai:generate-shots', async (_event, script: string) => {
+    try {
+      const config = await readAiConfig(workspaceConfig!.workspacePath)
+      if (!config.apiKey) {
+        return { success: false, error: '未配置 API Key' }
+      }
+      const shots = await callAiApi(config, script)
+      return { success: true, shots }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('ai:test-connection', async (_event, config: AiConfig) => {
+    try {
+      const result = await testAiConnection(config)
+      return result
+    } catch (err) {
+      return { success: false, message: String(err) }
     }
   })
 }

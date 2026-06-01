@@ -1,27 +1,31 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import {
   NButton, NSpace, NModal, NInputNumber, NCard, NTag, NSpin, NEmpty, NInput,
-  NForm, NFormItem, NDivider, NPopconfirm, NScrollbar
+  NForm, NFormItem, NDivider, NPopconfirm, NScrollbar, NCheckbox
 } from 'naive-ui'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSelectionStore } from '@/stores/selectionStore'
 import { useProject } from '@/composables/useProject'
 import { useStoryboard } from '@/composables/useStoryboard'
 import { useScript } from '@/composables/useScript'
+import { useAiAssistant } from '@/composables/useAiAssistant'
+import { notify } from '@/utils/notify'
 import type { Shot, RecentProject } from '@/types'
 
 const projectStore = useProjectStore()
 const selectionStore = useSelectionStore()
 const { loadWorkspace, openProject, newProject, saveProject, removeRecentProject } = useProject()
-const { addShotForParagraph, smartSplitAll, smartSplitSelected, getShotsForSelectedParagraph, deleteShot } = useStoryboard()
+const { addShotForParagraph, smartSplitAll, smartSplitSelected, deleteShot } = useStoryboard()
 const { parseParagraphs } = useScript()
 
 const editorText = ref(projectStore.script)
 const isEditing = ref(false)
+const editingParagraphs = ref<string[]>([])
 const showSmartSplitModal = ref(false)
 const smartSplitCount = ref(1)
 const workspaceLoading = ref(true)
+const aiSelectedParagraphs = ref<Set<number>>(new Set())
 
 const workspacePath = ref('')
 const recentProjects = ref<RecentProject[]>([])
@@ -32,7 +36,16 @@ const showNewProjectForm = ref(false)
 const creatingProject = ref(false)
 
 const paragraphs = computed(() => parseParagraphs(editorText.value))
-const selectedShots = computed(() => getShotsForSelectedParagraph())
+
+const selectedShots = computed(() => {
+  const idx = selectionStore.selectedParagraphIndex
+  if (idx < 0) return projectStore.shots
+  return projectStore.shots.filter((s) => s.scriptRef?.paragraphIndex === idx)
+})
+
+function getShotCountForParagraph(pIdx: number): number {
+  return projectStore.shots.filter((s) => s.scriptRef?.paragraphIndex === pIdx).length
+}
 
 function formatDate(isoStr: string): string {
   if (!isoStr) return ''
@@ -91,10 +104,53 @@ function isParagraphSelected(index: number): boolean {
   return selectionStore.selectedParagraphIndex === index
 }
 
+function startEditing(): void {
+  editingParagraphs.value = [...parseParagraphs(editorText.value)]
+  if (editingParagraphs.value.length === 0) {
+    editingParagraphs.value.push('')
+  }
+  isEditing.value = true
+}
+
+function addEditingParagraph(): void {
+  editingParagraphs.value.push('')
+}
+
+function removeEditingParagraph(index: number): void {
+  editingParagraphs.value.splice(index, 1)
+  if (editingParagraphs.value.length === 0) {
+    editingParagraphs.value.push('')
+  }
+}
+
 function handleSaveScript(): void {
+  editorText.value = editingParagraphs.value.join('\n\n')
   projectStore.updateScript(editorText.value)
   saveProject()
   isEditing.value = false
+}
+
+function cancelEdit(): void {
+  editingParagraphs.value = []
+  isEditing.value = false
+}
+
+function toggleAiSelect(pIdx: number): void {
+  const s = new Set(aiSelectedParagraphs.value)
+  if (s.has(pIdx)) {
+    s.delete(pIdx)
+  } else {
+    s.add(pIdx)
+  }
+  aiSelectedParagraphs.value = s
+}
+
+function toggleAiSelectAll(): void {
+  if (aiSelectedParagraphs.value.size === paragraphs.value.length) {
+    aiSelectedParagraphs.value = new Set()
+  } else {
+    aiSelectedParagraphs.value = new Set(paragraphs.value.map((_, i) => i))
+  }
 }
 
 function handleSmartSplit(paragraphIndex: number): void {
@@ -131,9 +187,121 @@ function handleDeleteShot(shotId: string): void {
   saveProject()
 }
 
+const { isConfigValid, generateShots } = useAiAssistant()
+
+const showAiConfirm = ref(false)
+const aiLoading = ref(false)
+
+async function handleAiSplit(): Promise<void> {
+  const config = await refreshAiConfig()
+  if (!isConfigValid(config)) {
+    notify().info('请先在设置中配置 AI API Key')
+    return
+  }
+  aiSelectedParagraphs.value = new Set()
+  showAiConfirm.value = true
+}
+
+const selectedAiCount = computed(() => aiSelectedParagraphs.value.size)
+
+async function refreshAiConfig() {
+  const { getAiConfig } = useAiAssistant()
+  return await getAiConfig()
+}
+
+async function confirmAiSplit(): Promise<void> {
+  showAiConfirm.value = false
+  aiLoading.value = true
+
+  try {
+    const currentParagraphs = parseParagraphs(editorText.value)
+    let selectedIndices: number[]
+
+    if (aiSelectedParagraphs.value.size > 0) {
+      selectedIndices = [...aiSelectedParagraphs.value].sort((a, b) => a - b)
+    } else {
+      selectedIndices = currentParagraphs.map((_, i) => i)
+    }
+
+    const selectedTexts = selectedIndices.map((i) => currentParagraphs[i])
+    const combinedText = selectedTexts.join('\n\n')
+
+    const aiShots = await generateShots(combinedText)
+
+    const newShots: Shot[] = []
+    let shotCounter = 1
+
+    for (let aiIdx = 0; aiIdx < aiShots.length; aiIdx++) {
+      const aiResult = aiShots[aiIdx]
+      const dialogue = aiResult.dialogue || ''
+
+      let paraIdx = selectedIndices[0]
+      let paraText = currentParagraphs[paraIdx]
+
+      for (const si of selectedIndices) {
+        const pt = currentParagraphs[si]
+        if (pt.includes(dialogue.trim()) || dialogue.trim().includes(pt)) {
+          paraIdx = si
+          paraText = pt
+          break
+        }
+      }
+
+      const shot: Shot = {
+        id: `shot-${Date.now()}-${aiIdx}`,
+        number: shotCounter++,
+        scene: aiResult.scene as Shot['scene'],
+        camera: aiResult.camera as Shot['camera'],
+        duration: typeof aiResult.duration === 'number' && aiResult.duration >= 0
+          ? aiResult.duration
+          : 3,
+        transition: aiResult.transition as Shot['transition'],
+        description: aiResult.description || '',
+        dialogue: dialogue || paraText,
+        scriptRef: { paragraphIndex: paraIdx, text: paraText.substring(0, 100) },
+        notes: ''
+      }
+      newShots.push(shot)
+    }
+
+    if (aiSelectedParagraphs.value.size > 0) {
+      const otherShots = projectStore.shots.filter(
+        (s) => s.scriptRef?.paragraphIndex !== undefined && !selectedIndices.includes(s.scriptRef.paragraphIndex)
+      )
+      projectStore.shots.splice(0, projectStore.shots.length)
+      for (const shot of otherShots) {
+        shot.number = shotCounter++
+        projectStore.addShot(shot)
+      }
+      for (const shot of newShots) {
+        projectStore.addShot(shot)
+      }
+    } else {
+      projectStore.shots.splice(0, projectStore.shots.length)
+      for (const shot of newShots) {
+        projectStore.addShot(shot)
+      }
+    }
+
+    projectStore.renumberShots()
+    saveProject()
+    notify().success(`已生成 ${newShots.length} 个分镜`)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'AI 分析失败'
+    notify().error(msg)
+  } finally {
+    aiLoading.value = false
+  }
+}
+
 onMounted(async () => {
   await refreshWorkspace()
   workspaceLoading.value = false
+})
+
+watch(() => projectStore.script, (newScript) => {
+  editorText.value = newScript
+  isEditing.value = false
 })
 </script>
 
@@ -148,7 +316,7 @@ onMounted(async () => {
             <NButton
               v-if="!isEditing"
               size="small"
-              @click="isEditing = true"
+              @click="startEditing"
             >
               编辑
             </NButton>
@@ -161,27 +329,79 @@ onMounted(async () => {
               保存
             </NButton>
             <NButton
+              v-if="isEditing"
+              size="small"
+              @click="cancelEdit"
+            >
+              取消
+            </NButton>
+            <NButton
               size="small"
               @click="handleSmartSplitAll"
             >
               全部拆解
+            </NButton>
+            <NButton
+              size="small"
+              type="info"
+              :loading="aiLoading"
+              @click="handleAiSplit"
+            >
+              {{ aiLoading ? '⏳ AI 分析中…' : '🤖 AI 智能分镜' }}
             </NButton>
           </NSpace>
         </div>
 
         <div class="script-content">
           <template v-if="isEditing">
-            <NInput
-              v-model:value="editorText"
-              type="textarea"
-              :autosize="{ minRows: 20 }"
-              placeholder="在此输入剧本或旁白文本，每段自动解析为独立段落..."
-              class="script-textarea"
-            />
+            <NScrollbar style="max-height: calc(100vh - 140px)">
+              <div class="editing-paragraphs">
+                <div
+                  v-for="(para, pIdx) in editingParagraphs"
+                  :key="pIdx"
+                  class="editing-para-row"
+                >
+                  <span class="editing-para-label">段{{ pIdx + 1 }}</span>
+                  <NInput
+                    v-model:value="editingParagraphs[pIdx]"
+                    type="textarea"
+                    :autosize="{ minRows: 2, maxRows: 6 }"
+                    :placeholder="`第 ${pIdx + 1} 段文案…`"
+                    class="editing-para-input"
+                  />
+                  <NButton
+                    size="tiny"
+                    quaternary
+                    type="error"
+                    @click="removeEditingParagraph(pIdx)"
+                    v-if="editingParagraphs.length > 1"
+                  >
+                    ✕
+                  </NButton>
+                </div>
+                <NButton
+                  size="small"
+                  dashed
+                  style="margin-top: 8px; width: 100%"
+                  @click="addEditingParagraph"
+                >
+                  + 添加段落
+                </NButton>
+              </div>
+            </NScrollbar>
           </template>
           <template v-else>
             <NScrollbar style="max-height: calc(100vh - 140px)">
               <div class="script-paragraphs">
+                <div class="ai-select-bar" v-if="paragraphs.length > 0">
+                  <NCheckbox
+                    size="small"
+                    :checked="aiSelectedParagraphs.size === paragraphs.length"
+                    @update:checked="toggleAiSelectAll"
+                  >
+                    全选段落 ({{ aiSelectedParagraphs.size }}/{{ paragraphs.length }})
+                  </NCheckbox>
+                </div>
                 <div
                   v-for="(para, pIdx) in paragraphs"
                   :key="pIdx"
@@ -189,9 +409,20 @@ onMounted(async () => {
                   :class="{ 'paragraph-selected': isParagraphSelected(pIdx) }"
                   @click="handleParagraphClick(pIdx)"
                 >
-                  <div class="paragraph-index">{{ pIdx + 1 }}</div>
+                  <div class="paragraph-index">
+                    <NCheckbox
+                      size="small"
+                      :checked="aiSelectedParagraphs.has(pIdx)"
+                      @click.stop
+                      @update:checked="toggleAiSelect(pIdx)"
+                    />
+                    <span>{{ pIdx + 1 }}</span>
+                  </div>
                   <div class="paragraph-text">{{ para }}</div>
                   <div class="paragraph-actions">
+                    <NTag v-if="getShotCountForParagraph(pIdx) > 0" size="tiny" type="info" round style="margin-right: 2px">
+                      {{ getShotCountForParagraph(pIdx) }}镜
+                    </NTag>
                     <NButton size="tiny" quaternary @click.stop="handleAddShotForParagraph(pIdx)">
                       + 镜头
                     </NButton>
@@ -212,7 +443,10 @@ onMounted(async () => {
         <div class="panel-header">
           <span>🎬 关联分镜</span>
           <span v-if="selectionStore.selectedParagraphIndex >= 0" class="panel-hint">
-            段落 {{ selectionStore.selectedParagraphIndex + 1 }} 的分镜
+            段落 {{ selectionStore.selectedParagraphIndex + 1 }} · {{ selectedShots.length }} 个分镜
+          </span>
+          <span v-else class="panel-hint">
+            全部 {{ selectedShots.length }} 个分镜
           </span>
         </div>
 
@@ -244,7 +478,7 @@ onMounted(async () => {
                 </div>
               </NCard>
             </template>
-            <NEmpty v-else description="点击左侧段落来查看关联镜头" style="margin-top: 40px" />
+            <NEmpty v-else description="暂无分镜，使用 AI 或手动添加" style="margin-top: 40px" />
           </div>
         </NScrollbar>
       </div>
@@ -257,6 +491,24 @@ onMounted(async () => {
           <NSpace justify="end" style="margin-top: 16px">
             <NButton @click="showSmartSplitModal = false">取消</NButton>
             <NButton type="primary" @click="confirmSmartSplitSelected">确认拆解</NButton>
+          </NSpace>
+        </div>
+      </NModal>
+
+      <NModal v-model:show="showAiConfirm" title="🤖 AI 智能分镜">
+        <div style="padding: 16px; min-width: 320px">
+          <p style="margin-bottom: 8px; font-weight: 600">AI 将分析所选段落并自动生成：</p>
+          <ul style="margin: 0 0 12px; padding-left: 20px; font-size: 13px; color: #555; line-height: 1.8">
+            <li>景别 / 运镜 / 时长</li>
+            <li>转场 / 画面描述</li>
+            <li>对白保持原样不修改</li>
+          </ul>
+          <p style="font-size: 12px; color: #888; margin-bottom: 12px">
+            已选择 <strong>{{ selectedAiCount > 0 ? selectedAiCount : '全部' }}</strong> 段，AI 将保持段落顺序
+          </p>
+          <NSpace justify="end">
+            <NButton @click="showAiConfirm = false">取消</NButton>
+            <NButton type="info" @click="confirmAiSplit">开始分析</NButton>
           </NSpace>
         </div>
       </NModal>
@@ -404,6 +656,38 @@ onMounted(async () => {
   line-height: 1.8;
 }
 
+.editing-paragraphs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editing-para-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.editing-para-label {
+  font-size: 12px;
+  color: #6366f1;
+  font-weight: 600;
+  min-width: 36px;
+  padding-top: 8px;
+}
+
+.editing-para-input {
+  flex: 1;
+}
+
+.ai-select-bar {
+  padding: 4px 10px;
+  background: #f0f4ff;
+  border-radius: 6px;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
 .script-paragraphs {
   display: flex;
   flex-direction: column;
@@ -435,9 +719,12 @@ onMounted(async () => {
 }
 
 .paragraph-index {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   color: #aaa;
-  min-width: 20px;
+  min-width: 52px;
   text-align: center;
   padding-top: 2px;
 }
@@ -457,7 +744,8 @@ onMounted(async () => {
 }
 
 .shot-preview-panel {
-  width: 380px;
+  width: 420px;
+  min-width: 320px;
   display: flex;
   flex-direction: column;
 }
@@ -471,6 +759,17 @@ onMounted(async () => {
 
 .shot-card {
   border-radius: 8px;
+  overflow: visible;
+}
+
+.shot-card :deep(.n-card__content) {
+  overflow: visible;
+  word-break: break-word;
+  white-space: normal;
+}
+
+.shot-card :deep(.n-card-header) {
+  overflow: visible;
 }
 
 .shot-card-header {
@@ -482,17 +781,20 @@ onMounted(async () => {
 
 .shot-card-body {
   font-size: 12px;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .shot-description {
   color: #555;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .shot-dialogue {
-  margin-top: 4px;
+  margin-top: 6px;
   color: #6366f1;
   font-style: italic;
+  line-height: 1.5;
 }
 
 /* ====== Welcome Page ====== */

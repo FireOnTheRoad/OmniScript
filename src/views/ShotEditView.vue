@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import {
-  NButton, NSpace, NSelect, NInput, NInputNumber, NCard, NEmpty, NButtonGroup
+  NButton, NSpace, NSelect, NInput, NInputNumber, NEmpty, NButtonGroup, NColorPicker
 } from 'naive-ui'
 import { useProjectStore } from '@/stores/projectStore'
 import { useProject } from '@/composables/useProject'
-import { useRouter, useRoute } from 'vue-router'
+import { useRouter } from 'vue-router'
 import type { Shot, ShotScene, ShotCamera, ShotTransition } from '@/types'
+import type { Canvas as FabricCanvas, Rect, Circle, Line, Group, PencilBrush, FabricObject } from 'fabric'
 
 const props = defineProps<{
   shotId?: string
@@ -33,6 +34,7 @@ const canvasRef = ref<HTMLCanvasElement | null>(null)
 const drawingTool = ref<'pen' | 'rect' | 'circle' | 'arrow' | 'eraser'>('pen')
 const strokeColor = ref('#333333')
 const strokeWidth = ref(2)
+const showColorPicker = ref(false)
 
 const sceneOptions = [
   { label: '远景', value: '远景' },
@@ -81,32 +83,247 @@ watch(
   { immediate: true }
 )
 
-let fabricCanvas: unknown = null
+let fabricCanvas: FabricCanvas | null = null
 let canvasInitialized = false
+let resizeObserver: ResizeObserver | null = null
+
+let isDrawing = false
+let startX = 0
+let startY = 0
+let currentShape: FabricObject | null = null
 
 async function initCanvas(): Promise<void> {
   await nextTick()
   if (!canvasRef.value || canvasInitialized) return
 
   try {
-    const Fabric = await import('fabric')
-    const { Canvas } = Fabric
+    const fabric = await import('fabric')
+    const { Canvas, PencilBrush } = fabric
+
+    const parent = canvasRef.value.parentElement
+    const w = parent?.clientWidth || 800
+    const h = parent?.clientHeight || 600
+
     fabricCanvas = new Canvas(canvasRef.value, {
-      isDrawingMode: false,
-      width: canvasRef.value.parentElement?.clientWidth || 700,
-      height: canvasRef.value.parentElement?.clientHeight || 500,
-      backgroundColor: '#ffffff'
+      width: w,
+      height: h,
+      backgroundColor: '#ffffff',
+      selection: true
     })
+
+    const brush = new PencilBrush(fabricCanvas)
+    brush.color = strokeColor.value
+    brush.width = strokeWidth.value
+    fabricCanvas.freeDrawingBrush = brush
+
+    setupDrawingEvents(fabricCanvas)
+
+    resizeObserver = new ResizeObserver(() => {
+      if (!fabricCanvas || !parent) return
+      const nw = parent.clientWidth
+      const nh = parent.clientHeight
+      if (nw > 0 && nh > 0) {
+        fabricCanvas.setDimensions({ width: nw, height: nh })
+      }
+    })
+    if (parent) resizeObserver.observe(parent)
+
     canvasInitialized = true
-  } catch {
-    // Canvas not critical for functionality
+  } catch (err) {
+    console.error('Canvas init failed:', err)
   }
 }
 
+function setupDrawingEvents(canvas: FabricCanvas): void {
+  canvas.on('mouse:down', (opt: any) => {
+    const tool = drawingTool.value
+    if (tool === 'pen' || tool === 'eraser') return
+
+    const pointer = canvas.getScenePoint(opt.e)
+    isDrawing = true
+    startX = pointer.x
+    startY = pointer.y
+
+    if (tool === 'rect') {
+      const fabric = requireFabric()
+      if (!fabric) return
+      currentShape = new fabric.Rect({
+        left: startX,
+        top: startY,
+        width: 0,
+        height: 0,
+        fill: 'transparent',
+        stroke: strokeColor.value,
+        strokeWidth: strokeWidth.value,
+        selectable: true
+      })
+      canvas.add(currentShape)
+    } else if (tool === 'circle') {
+      const fabric = requireFabric()
+      if (!fabric) return
+      currentShape = new fabric.Circle({
+        left: startX,
+        top: startY,
+        radius: 0,
+        fill: 'transparent',
+        stroke: strokeColor.value,
+        strokeWidth: strokeWidth.value,
+        selectable: true
+      })
+      canvas.add(currentShape)
+    } else if (tool === 'arrow') {
+      const fabric = requireFabric()
+      if (!fabric) return
+      const line = new fabric.Line([startX, startY, startX, startY], {
+        stroke: strokeColor.value,
+        strokeWidth: strokeWidth.value,
+        selectable: true
+      })
+      currentShape = line
+      canvas.add(currentShape)
+    }
+  })
+
+  canvas.on('mouse:move', (opt: any) => {
+    if (!isDrawing || !currentShape) return
+    const pointer = canvas.getScenePoint(opt.e)
+    const tool = drawingTool.value
+    const fabric = requireFabric()
+    if (!fabric) return
+
+    if (tool === 'rect' && currentShape.type === 'rect') {
+      const rect = currentShape as unknown as Rect
+      rect.set({
+        width: Math.abs(pointer.x - startX),
+        height: Math.abs(pointer.y - startY)
+      })
+      rect.set({ left: Math.min(pointer.x, startX), top: Math.min(pointer.y, startY) })
+      canvas.requestRenderAll()
+    } else if (tool === 'circle' && currentShape.type === 'circle') {
+      const circle = currentShape as unknown as Circle
+      const rx = Math.abs(pointer.x - startX) / 2
+      const ry = Math.abs(pointer.y - startY) / 2
+      circle.set({
+        radius: Math.max(rx, ry),
+        left: startX - Math.max(rx, ry),
+        top: startY - Math.max(rx, ry)
+      })
+      canvas.requestRenderAll()
+    } else if (tool === 'arrow' && currentShape.type === 'line') {
+      const line = currentShape as unknown as Line
+      line.set({ x2: pointer.x, y2: pointer.y })
+      canvas.requestRenderAll()
+    }
+  })
+
+  canvas.on('mouse:up', () => {
+    if (!isDrawing || !currentShape) return
+    const tool = drawingTool.value
+
+    if (tool === 'arrow' && currentShape.type === 'line') {
+      const fabric = requireFabric()
+      if (!fabric) {
+        isDrawing = false
+        currentShape = null
+        return
+      }
+      const line = currentShape as unknown as Line
+      const x1 = (line as any).x1 ?? 0
+      const y1 = (line as any).y1 ?? 0
+      const x2 = (line as any).x2 ?? x1
+      const y2 = (line as any).y2 ?? y1
+      const angle = Math.atan2(y2 - y1, x2 - x1)
+      const headLen = 12 + strokeWidth.value * 2
+
+      const tip = new fabric.Triangle({
+        left: x2,
+        top: y2,
+        width: headLen,
+        height: headLen * 0.6,
+        fill: strokeColor.value,
+        angle: fabric.util.radiansToDegrees(angle) + 90,
+        originX: 'center',
+        originY: 'center',
+        selectable: false,
+        evented: false
+      })
+
+      canvas.remove(currentShape)
+      const group = new fabric.Group([line, tip], {
+        selectable: true,
+        hasControls: true
+      })
+      canvas.add(group)
+    }
+
+    isDrawing = false
+    currentShape = null
+  })
+}
+
+let fabricModule: typeof import('fabric') | null = null
+
+function requireFabric(): typeof import('fabric') | null {
+  return fabricModule
+}
+
+watch(drawingTool, (tool) => {
+  if (!fabricCanvas) return
+  if (tool === 'pen') {
+    fabricCanvas.isDrawingMode = true
+    const brush = fabricCanvas.freeDrawingBrush as PencilBrush
+    brush.color = strokeColor.value
+    brush.width = strokeWidth.value
+  } else if (tool === 'eraser') {
+    fabricCanvas.isDrawingMode = true
+    const brush = fabricCanvas.freeDrawingBrush as PencilBrush
+    brush.color = '#ffffff'
+    brush.width = strokeWidth.value * 4
+  } else {
+    fabricCanvas.isDrawingMode = false
+  }
+})
+
+watch(strokeColor, (color) => {
+  if (!fabricCanvas) return
+  if (drawingTool.value === 'pen') {
+    const brush = fabricCanvas.freeDrawingBrush as PencilBrush
+    brush.color = color
+  }
+})
+
+watch(strokeWidth, (w) => {
+  if (!fabricCanvas) return
+  if (drawingTool.value === 'pen' || drawingTool.value === 'eraser') {
+    const brush = fabricCanvas.freeDrawingBrush as PencilBrush
+    brush.width = drawingTool.value === 'eraser' ? w * 4 : w
+  }
+})
+
+function handleUndo(): void {
+  if (!fabricCanvas) return
+  const objects = fabricCanvas.getObjects()
+  if (objects.length > 0) {
+    fabricCanvas.remove(objects[objects.length - 1])
+    fabricCanvas.requestRenderAll()
+  }
+}
+
+function handleClear(): void {
+  if (!fabricCanvas) return
+  fabricCanvas.clear()
+  fabricCanvas.backgroundColor = '#ffffff'
+  fabricCanvas.requestRenderAll()
+}
+
 function cleanupCanvas(): void {
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
   if (fabricCanvas) {
     try {
-      ;(fabricCanvas as { dispose?: () => void }).dispose?.()
+      fabricCanvas.dispose()
     } catch {
       // ignore
     }
@@ -133,8 +350,10 @@ function handleBack(): void {
   router.push({ name: 'storyboard' })
 }
 
-onMounted(() => {
-  initCanvas()
+onMounted(async () => {
+  const fabric = await import('fabric')
+  fabricModule = fabric
+  await initCanvas()
 })
 
 onUnmounted(() => {
@@ -203,7 +422,7 @@ onUnmounted(() => {
             <NInput
               v-model:value="strokeColor"
               size="small"
-              style="width: 80px;"
+              style="width: 72px;"
               placeholder="#333"
             />
             <span class="tool-label">粗细</span>
@@ -212,8 +431,10 @@ onUnmounted(() => {
               :min="1"
               :max="20"
               size="small"
-              style="width: 60px;"
+              style="width: 56px;"
             />
+            <NButton size="small" quaternary @click="handleUndo">↩ 撤销</NButton>
+            <NButton size="small" quaternary @click="handleClear">🗑 清空</NButton>
           </NSpace>
         </div>
 
@@ -380,11 +601,7 @@ onUnmounted(() => {
 }
 
 .drawing-canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
+  display: block;
 }
 
 .property-panel {
