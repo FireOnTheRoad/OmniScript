@@ -28,7 +28,10 @@ const validInvokeChannels = [
   'ai:get-config',
   'ai:save-config',
   'ai:generate-shots',
-  'ai:test-connection'
+  'ai:test-connection',
+  'prompts:list',
+  'prompts:save',
+  'prompts:delete'
 ]
 
 const api = {

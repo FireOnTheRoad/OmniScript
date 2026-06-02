@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, h } from 'vue'
 import {
   NModal, NButton, NSpace, NInput, NInputNumber, NSelect, NDivider,
-  NForm, NFormItem
+  NForm, NFormItem, NTabs, NTabPane, NDataTable, NPopconfirm, NSpin, NTag, NEmpty
 } from 'naive-ui'
+import type { DataTableColumns } from 'naive-ui'
 import { useIpc } from '@/composables/useIpc'
 import { useAiAssistant } from '@/composables/useAiAssistant'
+import { usePrompts } from '@/composables/usePrompts'
 import { notify } from '@/utils/notify'
-import type { AppSettings, AiConfig } from '@/types'
+import type { AppSettings, AiConfig, StoredPrompt } from '@/types'
 
 const props = defineProps<{
   show: boolean
@@ -21,7 +23,12 @@ const emit = defineEmits<{
 }>()
 
 const { invoke } = useIpc()
+const { getAiConfig, saveAiConfig: persistAiConfig } = useAiAssistant()
+const { listPrompts, savePrompt, removePrompt } = usePrompts()
 
+const activeTab = ref('general')
+
+// ====== Tab 1: 通用设置 ======
 const editingPath = ref(props.workspacePath)
 const defaultShotDuration = ref(props.settings.defaultShotDuration)
 const frameRate = ref(props.settings.frameRate)
@@ -82,12 +89,7 @@ async function handleSaveSettings(): Promise<void> {
   }
 }
 
-function handleClose(): void {
-  emit('update:show', false)
-}
-
-const { getAiConfig, saveAiConfig: persistAiConfig } = useAiAssistant()
-
+// ====== Tab 2: AI 配置 ======
 const aiProvider = ref<'openai' | 'anthropic' | 'deepseek'>('openai')
 const aiApiUrl = ref('')
 const aiApiKey = ref('')
@@ -149,7 +151,6 @@ async function handleTestConnection(): Promise<void> {
   }
   testingConnection.value = true
   try {
-    const { invoke } = useIpc()
     const result = await invoke<{ success: boolean; message: string }>(
       'ai:test-connection',
       {
@@ -171,8 +172,156 @@ async function handleTestConnection(): Promise<void> {
   }
 }
 
+// ====== Tab 3: AI 提示词管理 ======
+const prompts = ref<StoredPrompt[]>([])
+const promptsLoading = ref(false)
+const showPromptModal = ref(false)
+const editingPrompt = ref<StoredPrompt | null>(null)
+const promptFormName = ref('')
+const promptFormContent = ref('')
+const promptFormMode = ref<'default' | 'host'>('default')
+const promptSaving = ref(false)
+
+const modeLabels: Record<string, string> = {
+  default: '🎥 默认（产品/场景展示）',
+  host: '🎙️ 真人出镜口播'
+}
+
+const promptColumns: DataTableColumns<StoredPrompt> = [
+  {
+    title: '名称',
+    key: 'name',
+    width: 180,
+    ellipsis: { tooltip: true }
+  },
+  {
+    title: '模式',
+    key: 'mode',
+    width: 140,
+    render: (row) => h(NTag, { size: 'small', type: row.mode === 'host' ? 'warning' : 'info', bordered: false },
+      { default: () => modeLabels[row.mode] || row.mode })
+  },
+  {
+    title: '内容预览',
+    key: 'content',
+    ellipsis: { tooltip: true },
+    render: (row) => {
+      const preview = row.content.replace(/\n/g, ' ').substring(0, 60)
+      return preview + (row.content.length > 60 ? '…' : '')
+    }
+  },
+  {
+    title: '最后更新',
+    key: 'updatedAt',
+    width: 120,
+    render: (row) => {
+      try {
+        const d = new Date(row.updatedAt)
+        if (isNaN(d.getTime())) return '—'
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      } catch { return '—' }
+    }
+  },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 120,
+    render: (row) => {
+      const isBuiltin = row.id.startsWith('builtin-')
+      return h(NSpace, { size: 4 }, () => [
+        h(NButton, {
+          size: 'tiny',
+          quaternary: true,
+          onClick: () => openEditPrompt(row)
+        }, { default: () => '✏️' }),
+        !isBuiltin
+          ? h(NPopconfirm, {
+            onPositiveClick: () => handleDeletePrompt(row.id)
+          }, {
+            trigger: () => h(NButton, {
+              size: 'tiny',
+              quaternary: true,
+              type: 'error'
+            }, { default: () => '🗑' }),
+            default: () => '删除该提示词？将恢复内置默认'
+          })
+          : null
+      ])
+    }
+  }
+]
+
+async function loadPrompts(): Promise<void> {
+  promptsLoading.value = true
+  try {
+    prompts.value = await listPrompts()
+  } catch (err) {
+    notify().error('加载提示词失败：' + String(err))
+  } finally {
+    promptsLoading.value = false
+  }
+}
+
+function openEditPrompt(prompt: StoredPrompt): void {
+  editingPrompt.value = prompt
+  promptFormName.value = prompt.name
+  promptFormContent.value = prompt.content
+  promptFormMode.value = prompt.mode
+  showPromptModal.value = true
+}
+
+function openCreatePrompt(): void {
+  editingPrompt.value = null
+  promptFormName.value = ''
+  promptFormContent.value = ''
+  promptFormMode.value = 'default'
+  showPromptModal.value = true
+}
+
+async function handleSavePrompt(): Promise<void> {
+  if (!promptFormName.value.trim()) {
+    notify().error('请输入提示词名称')
+    return
+  }
+  if (!promptFormContent.value.trim()) {
+    notify().error('请输入提示词内容')
+    return
+  }
+  promptSaving.value = true
+  try {
+    await savePrompt({
+      id: editingPrompt.value?.id,
+      name: promptFormName.value.trim(),
+      content: promptFormContent.value.trim(),
+      mode: promptFormMode.value
+    })
+    showPromptModal.value = false
+    await loadPrompts()
+    notify().success('提示词已保存')
+  } catch (err) {
+    notify().error('保存失败：' + String(err))
+  } finally {
+    promptSaving.value = false
+  }
+}
+
+async function handleDeletePrompt(promptId: string): Promise<void> {
+  try {
+    await removePrompt(promptId)
+    await loadPrompts()
+    notify().success('已删除并恢复内置默认')
+  } catch (err) {
+    notify().error('删除失败：' + String(err))
+  }
+}
+
+function handleClose(): void {
+  emit('update:show', false)
+}
+
 onMounted(() => {
   loadAiConfig()
+  loadPrompts()
 })
 </script>
 
@@ -181,152 +330,221 @@ onMounted(() => {
     :show="show"
     title="⚙️ 软件设置"
     preset="card"
-    style="width: 540px"
+    style="width: 680px; max-height: 80vh"
     :bordered="false"
     @update:show="handleClose"
   >
-    <div class="settings-body">
-      <!-- 工作区路径 -->
-      <div class="settings-group">
-        <div class="group-title">📁 工作区路径</div>
-        <p class="group-desc">所有项目将保存在此目录下</p>
-        <NSpace vertical style="width: 100%">
-          <NSpace style="width: 100%">
-            <NInput
-              v-model:value="editingPath"
-              style="flex: 1"
-              placeholder="D:\MyProjects\Storyboard"
-            />
-            <NButton size="small" quaternary @click="handlePickWorkspace">
-              浏览...
+    <NTabs v-model:value="activeTab" type="line" size="medium">
+      <NTabPane name="general" tab="📁 通用设置">
+        <div class="tab-body">
+          <div class="settings-group">
+            <div class="group-title">📁 工作区路径</div>
+            <p class="group-desc">所有项目将保存在此目录下</p>
+            <NSpace vertical style="width: 100%">
+              <NSpace style="width: 100%">
+                <NInput
+                  v-model:value="editingPath"
+                  style="flex: 1"
+                  placeholder="D:\MyProjects\Storyboard"
+                />
+                <NButton size="small" quaternary @click="handlePickWorkspace">
+                  浏览...
+                </NButton>
+              </NSpace>
+              <NButton
+                type="primary"
+                size="small"
+                :disabled="editingPath === workspacePath"
+                @click="handleSavePath"
+              >
+                {{ pathSaved ? '已保存 ✓' : '保存路径' }}
+              </NButton>
+            </NSpace>
+          </div>
+
+          <NDivider />
+
+          <div class="settings-group">
+            <div class="group-title">🎬 新建项目默认参数</div>
+            <p class="group-desc">创建新项目时自动应用这些默认值</p>
+
+            <NForm label-placement="left" label-width="120" size="small">
+              <NFormItem label="默认镜头时长(s)">
+                <NInputNumber
+                  v-model:value="defaultShotDuration"
+                  :min="0.5"
+                  :max="60"
+                  :step="0.5"
+                  style="width: 120px"
+                />
+              </NFormItem>
+              <NFormItem label="帧率 (fps)">
+                <NInputNumber
+                  v-model:value="frameRate"
+                  :min="12"
+                  :max="120"
+                  :step="1"
+                  style="width: 120px"
+                />
+              </NFormItem>
+              <NFormItem label="默认画幅比例">
+                <NSelect
+                  v-model:value="aspectRatio"
+                  :options="aspectOptions"
+                  style="width: 140px"
+                />
+              </NFormItem>
+            </NForm>
+
+            <NButton
+              type="primary"
+              size="small"
+              style="margin-top: 8px"
+              @click="handleSaveSettings"
+            >
+              {{ settingsSaved ? '已保存 ✓' : '保存参数' }}
             </NButton>
-          </NSpace>
-          <NButton
-            type="primary"
-            size="small"
-            :disabled="editingPath === workspacePath"
-            @click="handleSavePath"
-          >
-            {{ pathSaved ? '已保存 ✓' : '保存路径' }}
+          </div>
+        </div>
+      </NTabPane>
+
+      <NTabPane name="ai" tab="🤖 AI 配置">
+        <div class="tab-body">
+          <div class="settings-group">
+            <div class="group-title">🤖 AI 智能分镜</div>
+            <p class="group-desc">配置 AI API，启用智能分镜拆分与填充功能</p>
+
+            <NForm label-placement="left" label-width="100" size="small">
+              <NFormItem label="协议">
+                <NSelect
+                  v-model:value="aiProvider"
+                  :options="[
+                    { label: 'OpenAI', value: 'openai' },
+                    { label: 'DeepSeek', value: 'deepseek' },
+                    { label: 'Anthropic', value: 'anthropic' }
+                  ]"
+                  style="width: 160px"
+                  @update:value="onProviderChange"
+                />
+              </NFormItem>
+              <NFormItem label="API URL">
+                <NInput
+                  v-model:value="aiApiUrl"
+                  placeholder="https://api.openai.com/v1/chat/completions"
+                />
+              </NFormItem>
+              <NFormItem label="API Key">
+                <NSpace style="width: 100%">
+                  <NInput
+                    v-model:value="aiApiKey"
+                    :type="aiShowKey ? 'text' : 'password'"
+                    placeholder="sk-..."
+                    style="flex: 1"
+                  />
+                  <NButton size="tiny" quaternary @click="aiShowKey = !aiShowKey">
+                    {{ aiShowKey ? '🙈' : '👁' }}
+                  </NButton>
+                </NSpace>
+              </NFormItem>
+              <NFormItem label="模型">
+                <NInput
+                  v-model:value="aiModel"
+                  placeholder="gpt-4o"
+                />
+              </NFormItem>
+            </NForm>
+
+            <NButton
+              type="primary"
+              size="small"
+              style="margin-top: 8px"
+              @click="handleSaveAi"
+            >
+              {{ aiSaved ? '已保存 ✓' : '保存 AI 配置' }}
+            </NButton>
+            <NButton
+              size="small"
+              style="margin-top: 8px; margin-left: 8px"
+              :loading="testingConnection"
+              @click="handleTestConnection"
+            >
+              {{ testingConnection ? '测试中…' : '🔗 测试连接' }}
+            </NButton>
+          </div>
+        </div>
+      </NTabPane>
+
+      <NTabPane name="prompts" tab="📝 AI 提示词">
+        <div class="tab-body">
+          <div class="settings-group">
+            <div class="group-title">📝 AI 分镜提示词</div>
+            <p class="group-desc">自定义 AI 生成分镜时使用的系统提示词。内置提示词可编辑但不可删除</p>
+
+            <NSpace justify="end" style="margin-bottom: 12px">
+              <NButton size="small" type="primary" @click="openCreatePrompt">
+                + 新建提示词
+              </NButton>
+            </NSpace>
+
+            <NSpin :show="promptsLoading">
+              <NDataTable
+                v-if="prompts.length > 0"
+                :columns="promptColumns"
+                :data="prompts"
+                :bordered="false"
+                size="small"
+                :single-line="false"
+                :row-key="(row: StoredPrompt) => row.id"
+                :pagination="{ pageSize: 5 }"
+                style="margin-bottom: 8px"
+              />
+              <NEmpty v-else description="暂无提示词" style="padding: 20px" />
+            </NSpin>
+          </div>
+        </div>
+      </NTabPane>
+    </NTabs>
+
+    <!-- 提示词编辑弹窗 -->
+    <NModal v-model:show="showPromptModal" title="编辑提示词" preset="card" style="width: 640px" :bordered="false">
+      <div style="padding: 8px 0">
+        <NForm label-placement="top" size="small">
+          <NFormItem label="名称" required>
+            <NInput v-model:value="promptFormName" placeholder="例如：评测类口播" />
+          </NFormItem>
+          <NFormItem label="适用模式" required>
+            <NSelect
+              v-model:value="promptFormMode"
+              :options="[
+                { label: '🎥 默认（产品/场景展示）', value: 'default' },
+                { label: '🎙️ 真人出镜口播', value: 'host' }
+              ]"
+            />
+          </NFormItem>
+          <NFormItem label="提示词内容（系统提示词）" required>
+            <NInput
+              v-model:value="promptFormContent"
+              type="textarea"
+              :autosize="{ minRows: 10, maxRows: 20 }"
+              placeholder="输入完整的系统提示词…"
+              style="font-family: monospace; font-size: 12px"
+            />
+          </NFormItem>
+        </NForm>
+        <NSpace justify="end" style="margin-top: 12px">
+          <NButton @click="showPromptModal = false">取消</NButton>
+          <NButton type="primary" :loading="promptSaving" @click="handleSavePrompt">
+            保存提示词
           </NButton>
         </NSpace>
       </div>
-
-      <NDivider />
-
-      <!-- 默认参数 -->
-      <div class="settings-group">
-        <div class="group-title">🎬 新建项目默认参数</div>
-        <p class="group-desc">创建新项目时自动应用这些默认值</p>
-
-        <NForm label-placement="left" label-width="120" size="small">
-          <NFormItem label="默认镜头时长(s)">
-            <NInputNumber
-              v-model:value="defaultShotDuration"
-              :min="0.5"
-              :max="60"
-              :step="0.5"
-              style="width: 120px"
-            />
-          </NFormItem>
-          <NFormItem label="帧率 (fps)">
-            <NInputNumber
-              v-model:value="frameRate"
-              :min="12"
-              :max="120"
-              :step="1"
-              style="width: 120px"
-            />
-          </NFormItem>
-          <NFormItem label="默认画幅比例">
-            <NSelect
-              v-model:value="aspectRatio"
-              :options="aspectOptions"
-              style="width: 140px"
-            />
-          </NFormItem>
-        </NForm>
-
-        <NButton
-          type="primary"
-          size="small"
-          style="margin-top: 8px"
-          @click="handleSaveSettings"
-        >
-          {{ settingsSaved ? '已保存 ✓' : '保存参数' }}
-        </NButton>
-      </div>
-
-      <NDivider />
-
-      <div class="settings-group">
-        <div class="group-title">🤖 AI 智能分镜</div>
-        <p class="group-desc">配置 AI API，启用智能分镜拆分与填充功能</p>
-
-        <NForm label-placement="left" label-width="100" size="small">
-          <NFormItem label="协议">
-            <NSelect
-              v-model:value="aiProvider"
-              :options="[
-                { label: 'OpenAI', value: 'openai' },
-                { label: 'DeepSeek', value: 'deepseek' },
-                { label: 'Anthropic', value: 'anthropic' }
-              ]"
-              style="width: 160px"
-              @update:value="onProviderChange"
-            />
-          </NFormItem>
-          <NFormItem label="API URL">
-            <NInput
-              v-model:value="aiApiUrl"
-              placeholder="https://api.openai.com/v1/chat/completions"
-            />
-          </NFormItem>
-          <NFormItem label="API Key">
-            <NSpace style="width: 100%">
-              <NInput
-                v-model:value="aiApiKey"
-                :type="aiShowKey ? 'text' : 'password'"
-                placeholder="sk-..."
-                style="flex: 1"
-              />
-              <NButton size="tiny" quaternary @click="aiShowKey = !aiShowKey">
-                {{ aiShowKey ? '🙈' : '👁' }}
-              </NButton>
-            </NSpace>
-          </NFormItem>
-          <NFormItem label="模型">
-            <NInput
-              v-model:value="aiModel"
-              placeholder="gpt-4o"
-            />
-          </NFormItem>
-        </NForm>
-
-        <NButton
-          type="primary"
-          size="small"
-          style="margin-top: 8px"
-          @click="handleSaveAi"
-        >
-          {{ aiSaved ? '已保存 ✓' : '保存 AI 配置' }}
-        </NButton>
-        <NButton
-          size="small"
-          style="margin-top: 8px; margin-left: 8px"
-          :loading="testingConnection"
-          @click="handleTestConnection"
-        >
-          {{ testingConnection ? '测试中…' : '🔗 测试连接' }}
-        </NButton>
-      </div>
-    </div>
+    </NModal>
   </NModal>
 </template>
 
 <style scoped>
-.settings-body {
-  padding: 4px 0;
+.tab-body {
+  padding: 8px 0;
 }
 
 .settings-group {

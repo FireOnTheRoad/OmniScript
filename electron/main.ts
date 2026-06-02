@@ -21,6 +21,12 @@ import {
   testAiConnection,
   type AiConfig
 } from './aiService'
+import {
+  readAllPrompts,
+  savePrompt,
+  deletePrompt,
+  type StoredPrompt
+} from './promptService'
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
 app.commandLine.appendSwitch('no-sandbox')
@@ -341,13 +347,14 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('ai:generate-shots', async (_event, script: string) => {
+  ipcMain.handle('ai:generate-shots', async (_event, payload: { script: string; mode?: string }) => {
     try {
       const config = await readAiConfig(workspaceConfig!.workspacePath)
       if (!config.apiKey) {
         return { success: false, error: '未配置 API Key' }
       }
-      const shots = await callAiApi(config, script)
+      const mode = (payload.mode === 'host') ? 'host' : 'default'
+      const shots = await callAiApi(config, payload.script, workspaceConfig!.workspacePath, mode)
       return { success: true, shots }
     } catch (err) {
       return { success: false, error: String(err) }
@@ -360,6 +367,33 @@ function registerIpcHandlers(): void {
       return result
     } catch (err) {
       return { success: false, message: String(err) }
+    }
+  })
+
+  ipcMain.handle('prompts:list', async () => {
+    try {
+      const prompts = await readAllPrompts(workspaceConfig!.workspacePath)
+      return { success: true, prompts }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('prompts:save', async (_event, prompt: Omit<StoredPrompt, 'id' | 'updatedAt'> & { id?: string }) => {
+    try {
+      const saved = await savePrompt(workspaceConfig!.workspacePath, prompt)
+      return { success: true, prompt: saved }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('prompts:delete', async (_event, promptId: string) => {
+    try {
+      await deletePrompt(workspaceConfig!.workspacePath, promptId)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
     }
   })
 }

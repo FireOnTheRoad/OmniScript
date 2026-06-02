@@ -21,12 +21,12 @@ export function useAiAssistant() {
     return !!(config && config.apiKey && config.apiKey.trim().length > 0)
   }
 
-  async function generateShots(script: string): Promise<AiShotField[]> {
+  async function generateShots(script: string, mode: 'default' | 'host' = 'default'): Promise<AiShotField[]> {
     const result = await invoke<{
       success: boolean
       shots?: AiShotField[]
       error?: string
-    }>('ai:generate-shots', script)
+    }>('ai:generate-shots', { script, mode })
 
     if (!result.success || !result.shots) {
       throw new Error(result.error || 'AI 分析失败')

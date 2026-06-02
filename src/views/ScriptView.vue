@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import {
   NButton, NSpace, NModal, NInputNumber, NCard, NTag, NSpin, NEmpty, NInput,
-  NForm, NFormItem, NDivider, NPopconfirm, NScrollbar, NCheckbox
+  NForm, NFormItem, NDivider, NPopconfirm, NScrollbar, NCheckbox, NRadioGroup, NRadio
 } from 'naive-ui'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSelectionStore } from '@/stores/selectionStore'
@@ -191,6 +191,7 @@ const { isConfigValid, generateShots } = useAiAssistant()
 
 const showAiConfirm = ref(false)
 const aiLoading = ref(false)
+const aiMode = ref<'default' | 'host'>('default')
 
 async function handleAiSplit(): Promise<void> {
   const config = await refreshAiConfig()
@@ -210,7 +211,6 @@ async function refreshAiConfig() {
 }
 
 async function confirmAiSplit(): Promise<void> {
-  showAiConfirm.value = false
   aiLoading.value = true
 
   try {
@@ -226,7 +226,7 @@ async function confirmAiSplit(): Promise<void> {
     const selectedTexts = selectedIndices.map((i) => currentParagraphs[i])
     const combinedText = selectedTexts.join('\n\n')
 
-    const aiShots = await generateShots(combinedText)
+    const aiShots = await generateShots(combinedText, aiMode.value)
 
     const newShots: Shot[] = []
     let shotCounter = 1
@@ -290,6 +290,7 @@ async function confirmAiSplit(): Promise<void> {
     const msg = err instanceof Error ? err.message : 'AI 分析失败'
     notify().error(msg)
   } finally {
+    showAiConfirm.value = false
     aiLoading.value = false
   }
 }
@@ -344,10 +345,9 @@ watch(() => projectStore.script, (newScript) => {
             <NButton
               size="small"
               type="info"
-              :loading="aiLoading"
               @click="handleAiSplit"
             >
-              {{ aiLoading ? '⏳ AI 分析中…' : '🤖 AI 智能分镜' }}
+              🤖 AI 智能分镜
             </NButton>
           </NSpace>
         </div>
@@ -484,8 +484,8 @@ watch(() => projectStore.script, (newScript) => {
       </div>
 
       <!-- ====== 智能拆解弹窗 ====== -->
-      <NModal v-model:show="showSmartSplitModal" title="智能拆解">
-        <div style="padding: 16px; min-width: 280px">
+      <NModal v-model:show="showSmartSplitModal" title="智能拆解" preset="card" style="width: 320px">
+        <div style="padding: 16px">
           <p style="margin-bottom: 12px">为当前段落生成几个空镜头？</p>
           <NInputNumber v-model:value="smartSplitCount" :min="1" :max="20" style="width: 100%" />
           <NSpace justify="end" style="margin-top: 16px">
@@ -495,21 +495,37 @@ watch(() => projectStore.script, (newScript) => {
         </div>
       </NModal>
 
-      <NModal v-model:show="showAiConfirm" title="🤖 AI 智能分镜">
-        <div style="padding: 16px; min-width: 320px">
-          <p style="margin-bottom: 8px; font-weight: 600">AI 将分析所选段落并自动生成：</p>
-          <ul style="margin: 0 0 12px; padding-left: 20px; font-size: 13px; color: #555; line-height: 1.8">
-            <li>景别 / 运镜 / 时长</li>
-            <li>转场 / 画面描述</li>
-            <li>对白保持原样不修改</li>
-          </ul>
-          <p style="font-size: 12px; color: #888; margin-bottom: 12px">
-            已选择 <strong>{{ selectedAiCount > 0 ? selectedAiCount : '全部' }}</strong> 段，AI 将保持段落顺序
-          </p>
-          <NSpace justify="end">
-            <NButton @click="showAiConfirm = false">取消</NButton>
-            <NButton type="info" @click="confirmAiSplit">开始分析</NButton>
-          </NSpace>
+      <NModal v-model:show="showAiConfirm" :closable="!aiLoading" :mask-closable="!aiLoading" title="🤖 AI 智能分镜" preset="card" style="width: 420px">
+        <div style="padding: 16px">
+          <template v-if="!aiLoading">
+            <div style="margin-bottom: 12px">
+              <p style="margin-bottom: 6px; font-weight: 600; font-size: 13px">分镜模式</p>
+              <NRadioGroup v-model:value="aiMode" style="display: flex; gap: 12px">
+                <NRadio value="default">🎥 默认（产品/场景展示）</NRadio>
+                <NRadio value="host">🎙️ 真人出镜口播</NRadio>
+              </NRadioGroup>
+            </div>
+            <NDivider style="margin: 10px 0" />
+            <p style="margin-bottom: 8px; font-weight: 600">AI 将分析所选段落并自动生成：</p>
+            <ul style="margin: 0 0 12px; padding-left: 20px; font-size: 13px; color: #555; line-height: 1.8">
+              <li>景别 / 运镜 / 时长</li>
+              <li>转场 / 画面描述</li>
+              <li>对白保持原样不修改</li>
+            </ul>
+            <p style="font-size: 12px; color: #888; margin-bottom: 12px">
+              已选择 <strong>{{ selectedAiCount > 0 ? selectedAiCount : '全部' }}</strong> 段，AI 将保持段落顺序
+            </p>
+            <NSpace justify="end">
+              <NButton @click="showAiConfirm = false">取消</NButton>
+              <NButton type="info" @click="confirmAiSplit">开始分析</NButton>
+            </NSpace>
+          </template>
+          <template v-else>
+            <div style="text-align: center; padding: 20px 0">
+              <NSpin size="medium" />
+              <p style="margin-top: 12px; color: #888; font-size: 13px">⏳ AI 正在分析并拆分镜头…</p>
+            </div>
+          </template>
         </div>
       </NModal>
     </template>

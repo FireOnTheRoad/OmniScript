@@ -120,6 +120,14 @@ export interface AiShotField {
   dialogue: string
 }
 
+export interface StoredPrompt {
+  id: string
+  name: string
+  mode: 'default' | 'host'
+  content: string
+  updatedAt: string
+}
+
 export interface WorkspaceConfig {
   workspacePath: string
   lastProjectPath: string
