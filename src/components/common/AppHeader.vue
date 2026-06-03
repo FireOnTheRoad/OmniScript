@@ -13,7 +13,7 @@ const router = useRouter()
 const route = useRoute()
 const projectStore = useProjectStore()
 const { handleExportPDF, handleExportExcel, hasShots } = useExport()
-const { loadWorkspace } = useProject()
+const { loadWorkspace, closeProject } = useProject()
 
 const showSettings = ref(false)
 const workspacePath = ref('')
@@ -47,6 +47,10 @@ async function handleOpenSettings(): Promise<void> {
   showSettings.value = true
 }
 
+async function handleReturnToMenu(): Promise<void> {
+  await closeProject()
+}
+
 function handleSettingsUpdated(): void {
   loadWorkspace().then((ws) => {
     workspacePath.value = ws.workspacePath
@@ -74,6 +78,7 @@ onMounted(async () => {
 
     <div class="header-tabs">
       <NTabs
+        v-if="projectStore.hasOpenProject"
         :value="activeTab"
         type="line"
         size="medium"
@@ -83,9 +88,18 @@ onMounted(async () => {
         <NTabPane name="storyboard" tab="📊 分镜表" />
         <NTabPane name="edit" tab="✏️ 镜头绘图" />
       </NTabs>
+      <span v-else class="header-subtitle">视频分镜设计桌面工具</span>
     </div>
 
     <div class="header-right">
+      <NButton
+        v-if="projectStore.hasOpenProject"
+        size="small"
+        secondary
+        @click="handleReturnToMenu"
+      >
+        🏠 返回主菜单
+      </NButton>
       <span class="project-name">{{ projectStore.hasOpenProject ? projectStore.projectName : '未打开项目' }}</span>
 
       <NButton size="small" quaternary circle @click="handleOpenSettings" title="设置">
@@ -130,11 +144,10 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   padding: 0 16px;
-  height: 48px;
+  height: 36px;
   background: #fff;
   border-bottom: 1px solid #e5e7eb;
   user-select: none;
-  -webkit-app-region: drag;
 }
 
 .header-left {
@@ -145,12 +158,12 @@ onMounted(async () => {
 }
 
 .app-logo {
-  font-size: 20px;
+  font-size: 16px;
 }
 
 .app-title {
   font-weight: 700;
-  font-size: 16px;
+  font-size: 14px;
   color: #6366f1;
 }
 
@@ -158,19 +171,33 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   justify-content: center;
-  -webkit-app-region: no-drag;
 }
 
 .header-tabs :deep(.n-tabs-nav) {
   border-bottom: none;
 }
 
+.header-tabs :deep(.n-tabs-pane-wrapper) {
+  display: none;
+}
+
+.header-tabs :deep(.n-tabs-tab) {
+  padding: 2px 0 !important;
+  font-size: 12px !important;
+}
+
+.header-subtitle {
+  font-size: 13px;
+  color: #999;
+  font-weight: 400;
+}
+
 .header-right {
-  min-width: 220px;
+  min-width: 340px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: 6px;
   -webkit-app-region: no-drag;
 }
 

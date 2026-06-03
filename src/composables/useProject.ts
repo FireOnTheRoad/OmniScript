@@ -1,6 +1,7 @@
 import { useProjectStore } from '@/stores/projectStore'
 import { useIpc } from './useIpc'
 import { notify } from '@/utils/notify'
+import router from '@/router'
 import type { ProjectData, RecentProject, AppSettings } from '@/types'
 
 function toPlain<T>(data: T): T {
@@ -120,6 +121,12 @@ export function useProject() {
     })
   }
 
+  async function closeProject(): Promise<void> {
+    await saveProject(true)
+    store.clearProject()
+    router.push({ name: 'script' })
+  }
+
   function setupMenuListeners(): void {
     on('menu:open-project', async (path: unknown) => {
       if (typeof path === 'string') {
@@ -137,6 +144,7 @@ export function useProject() {
     openProject,
     newProject,
     saveProject,
+    closeProject,
     removeRecentProject,
     scheduleAutoSave,
     setupFileWatcher,

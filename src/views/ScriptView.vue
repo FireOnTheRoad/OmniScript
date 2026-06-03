@@ -22,6 +22,7 @@ const { parseParagraphs } = useScript()
 const editorText = ref(projectStore.script)
 const isEditing = ref(false)
 const editingParagraphs = ref<string[]>([])
+const editingMergeSelection = ref<Set<number>>(new Set())
 const showSmartSplitModal = ref(false)
 const smartSplitCount = ref(1)
 const workspaceLoading = ref(true)
@@ -106,6 +107,7 @@ function isParagraphSelected(index: number): boolean {
 
 function startEditing(): void {
   editingParagraphs.value = [...parseParagraphs(editorText.value)]
+  editingMergeSelection.value = new Set()
   if (editingParagraphs.value.length === 0) {
     editingParagraphs.value.push('')
   }
@@ -123,11 +125,80 @@ function removeEditingParagraph(index: number): void {
   }
 }
 
+function toggleMergeSelect(idx: number): void {
+  const s = new Set(editingMergeSelection.value)
+  if (s.has(idx)) { s.delete(idx) } else { s.add(idx) }
+  editingMergeSelection.value = s
+}
+
+function mergeSelectedParagraphs(): void {
+  const indices = [...editingMergeSelection.value].sort((a, b) => a - b)
+  if (indices.length < 2) {
+    notify().info('请至少选择 2 个段落')
+    return
+  }
+  for (let i = 1; i < indices.length; i++) {
+    if (indices[i] !== indices[i - 1] + 1) {
+      notify().error('只能合并连续的段落')
+      return
+    }
+  }
+  const first = indices[0]
+  const merged = indices.map(i => editingParagraphs.value[i]).join('')
+  editingParagraphs.value[first] = merged
+  for (let i = indices.length - 1; i > 0; i--) {
+    editingParagraphs.value.splice(indices[i], 1)
+  }
+  editingMergeSelection.value = new Set()
+  notify().success('段落已合并')
+}
+
 function handleSaveScript(): void {
   editorText.value = editingParagraphs.value.join('\n\n')
   projectStore.updateScript(editorText.value)
   saveProject()
   isEditing.value = false
+}
+
+function mergeParagraphsInViewMode(): void {
+  const currentParagraphs = parseParagraphs(editorText.value)
+  const indices = [...aiSelectedParagraphs.value].sort((a, b) => a - b)
+  if (indices.length < 2) {
+    notify().info('请至少选择 2 个段落')
+    return
+  }
+  for (let i = 1; i < indices.length; i++) {
+    if (indices[i] !== indices[i - 1] + 1) {
+      notify().error('只能合并连续的段落')
+      return
+    }
+  }
+
+  const first = indices[0]
+  const merged = indices.map(i => currentParagraphs[i]).join('')
+
+  const newParagraphs = currentParagraphs.filter((_, i) => !indices.slice(1).includes(i))
+  newParagraphs[first] = merged
+
+  editorText.value = newParagraphs.join('\n\n')
+  projectStore.updateScript(editorText.value)
+
+  const removedIndices = new Set(indices.slice(1))
+  for (const shot of projectStore.shots) {
+    const pIdx = shot.scriptRef?.paragraphIndex
+    if (pIdx !== undefined) {
+      if (removedIndices.has(pIdx)) {
+        shot.scriptRef = { paragraphIndex: first, text: merged.substring(0, 100) }
+      } else if (pIdx > indices[indices.length - 1]) {
+        const shift = indices.length - 1
+        shot.scriptRef = { paragraphIndex: pIdx - shift, text: shot.scriptRef!.text }
+      }
+    }
+  }
+
+  aiSelectedParagraphs.value = new Set()
+  saveProject()
+  notify().success(`已将 ${indices.length} 个段落合并为 1 个`)
 }
 
 function cancelEdit(): void {
@@ -349,18 +420,39 @@ watch(() => projectStore.script, (newScript) => {
             >
               🤖 AI 智能分镜
             </NButton>
+            <NButton
+              v-if="isEditing && editingMergeSelection.size >= 2"
+              size="small"
+              @click="mergeSelectedParagraphs"
+            >
+              🔗 合并 ({{ editingMergeSelection.size }})
+            </NButton>
+            <NButton
+              v-if="!isEditing && aiSelectedParagraphs.size >= 2"
+              size="small"
+              type="warning"
+              @click="mergeParagraphsInViewMode"
+            >
+              🔗 合并选中段落 ({{ aiSelectedParagraphs.size }})
+            </NButton>
           </NSpace>
         </div>
 
         <div class="script-content">
           <template v-if="isEditing">
-            <NScrollbar style="max-height: calc(100vh - 140px)">
+            <NScrollbar style="max-height: calc(100vh - 128px)">
               <div class="editing-paragraphs">
                 <div
                   v-for="(para, pIdx) in editingParagraphs"
                   :key="pIdx"
                   class="editing-para-row"
                 >
+                  <NCheckbox
+                    size="small"
+                    :checked="editingMergeSelection.has(pIdx)"
+                    @update:checked="toggleMergeSelect(pIdx)"
+                    class="merge-checkbox"
+                  />
                   <span class="editing-para-label">段{{ pIdx + 1 }}</span>
                   <NInput
                     v-model:value="editingParagraphs[pIdx]"
@@ -391,7 +483,7 @@ watch(() => projectStore.script, (newScript) => {
             </NScrollbar>
           </template>
           <template v-else>
-            <NScrollbar style="max-height: calc(100vh - 140px)">
+            <NScrollbar style="max-height: calc(100vh - 128px)">
               <div class="script-paragraphs">
                 <div class="ai-select-bar" v-if="paragraphs.length > 0">
                   <NCheckbox
@@ -576,10 +668,8 @@ watch(() => projectStore.script, (newScript) => {
                     />
                   </NFormItem>
                   <NSpace>
-                    <NButton type="primary" :loading="creatingProject" @click="handleCreateProject">
-                      创建项目
-                    </NButton>
-                    <NButton @click="showNewProjectForm = false">取消</NButton>
+                    <NButton type="primary" size="medium" :loading="creatingProject" @click="handleCreateProject">创建项目</NButton>
+                    <NButton size="medium" @click="showNewProjectForm = false">取消</NButton>
                   </NSpace>
                 </NForm>
               </div>
@@ -682,6 +772,11 @@ watch(() => projectStore.script, (newScript) => {
   display: flex;
   align-items: flex-start;
   gap: 8px;
+}
+
+.merge-checkbox {
+  margin-top: 8px;
+  flex-shrink: 0;
 }
 
 .editing-para-label {

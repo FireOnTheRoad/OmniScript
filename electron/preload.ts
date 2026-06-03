@@ -10,7 +10,8 @@ const validOnChannels = [
   'menu:new-project',
   'menu:open-project',
   'menu:save',
-  'project:file-changed'
+  'project:file-changed',
+  'window:maximize-change'
 ]
 
 const validInvokeChannels = [
@@ -31,7 +32,11 @@ const validInvokeChannels = [
   'ai:test-connection',
   'prompts:list',
   'prompts:save',
-  'prompts:delete'
+  'prompts:delete',
+  'window:minimize',
+  'window:maximize',
+  'window:close',
+  'window:is-maximized'
 ]
 
 const api = {

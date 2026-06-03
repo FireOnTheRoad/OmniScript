@@ -43,6 +43,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 1000,
     minHeight: 680,
+    frame: false,
     title: 'Storyboard - 分镜设计',
     show: false,
     webPreferences: {
@@ -57,6 +58,13 @@ function createWindow(): void {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('window:maximize-change', true)
+  })
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('window:maximize-change', false)
   })
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -395,6 +403,26 @@ function registerIpcHandlers(): void {
     } catch (err) {
       return { success: false, error: String(err) }
     }
+  })
+
+  ipcMain.handle('window:minimize', () => {
+    mainWindow?.minimize()
+  })
+
+  ipcMain.handle('window:maximize', () => {
+    if (mainWindow?.isMaximized()) {
+      mainWindow.unmaximize()
+    } else {
+      mainWindow?.maximize()
+    }
+  })
+
+  ipcMain.handle('window:close', () => {
+    mainWindow?.close()
+  })
+
+  ipcMain.handle('window:is-maximized', () => {
+    return mainWindow?.isMaximized() ?? false
   })
 }
 

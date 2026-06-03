@@ -114,7 +114,7 @@ function makeRequest(
       {
         method: 'POST',
         headers,
-        timeout: 60000
+        timeout: 180000
       },
       (res) => {
         let data = ''
@@ -130,9 +130,9 @@ function makeRequest(
       }
     )
 
-    req.setTimeout(60000, () => {
+    req.setTimeout(180000, () => {
       req.destroy()
-      reject(new Error('请求超时（60s）'))
+      reject(new Error('请求超时（180s），模型可能较慢，请稍后重试'))
     })
 
     req.on('error', reject)
@@ -186,12 +186,12 @@ export async function callAiApi(
     content = response?.content?.[0]?.text || ''
   } else {
     const msg = response?.choices?.[0]?.message || {}
-    content = msg.content || ''
+    content = msg.content || msg.reasoning_content || ''
   }
 
   if (!content) {
     const preview = JSON.stringify(response).slice(0, 500)
-    throw new Error(`AI 未返回有效内容。响应: ${preview}`)
+    throw new Error(`AI 未返回有效内容，请检查模型名称或 API Key。响应: ${preview}`)
   }
 
   return parseAiResponse(content)

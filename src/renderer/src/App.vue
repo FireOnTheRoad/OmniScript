@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { NMessageProvider, NDialogProvider, NConfigProvider, zhCN, dateZhCN } from 'naive-ui'
+import TitleBar from '@/components/common/TitleBar.vue'
 import AppHeader from '@/components/common/AppHeader.vue'
 import StatusBar from '@/components/common/StatusBar.vue'
 import MessageInit from '@/components/common/MessageInit.vue'
@@ -44,6 +45,7 @@ onMounted(() => {
       <NDialogProvider>
         <MessageInit />
         <div class="app-layout">
+          <TitleBar />
           <AppHeader />
           <main class="app-main">
             <router-view />
