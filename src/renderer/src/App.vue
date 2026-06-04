@@ -2,10 +2,11 @@
 import { onMounted } from 'vue'
 import { NMessageProvider, NDialogProvider, NConfigProvider, zhCN, dateZhCN } from 'naive-ui'
 import TitleBar from '@/components/common/TitleBar.vue'
-import AppHeader from '@/components/common/AppHeader.vue'
+import ProjectHeader from '@/components/common/ProjectHeader.vue'
 import StatusBar from '@/components/common/StatusBar.vue'
 import MessageInit from '@/components/common/MessageInit.vue'
 import { useProject } from '@/composables/useProject'
+import { useProjectStore } from '@/stores/projectStore'
 
 import { useIpc } from '@/composables/useIpc'
 import { useRouter } from 'vue-router'
@@ -21,6 +22,7 @@ const themeOverrides = {
 const { saveProject, setupFileWatcher, setupMenuListeners } = useProject()
 const { on } = useIpc()
 const router = useRouter()
+const projectStore = useProjectStore()
 
 onMounted(() => {
   setupFileWatcher()
@@ -46,7 +48,7 @@ onMounted(() => {
         <MessageInit />
         <div class="app-layout">
           <TitleBar />
-          <AppHeader />
+          <ProjectHeader v-if="projectStore.hasOpenProject" />
           <main class="app-main">
             <router-view />
           </main>

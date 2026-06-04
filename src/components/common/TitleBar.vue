@@ -1,27 +1,42 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { NButton } from 'naive-ui'
 import { useIpc } from '@/composables/useIpc'
+import { useProject } from '@/composables/useProject'
+import SettingsModal from '@/components/common/SettingsModal.vue'
+import type { AppSettings } from '@/types'
 
 const { invoke, on } = useIpc()
+const { loadWorkspace } = useProject()
 
 const isMaximized = ref(false)
+const showSettings = ref(false)
+const workspacePath = ref('')
+const appSettings = ref<AppSettings>({
+  defaultShotDuration: 3,
+  frameRate: 24,
+  aspectRatio: '16:9'
+})
 
 let unsubscribeMaximizeChange: (() => void) | null = null
 
-async function handleMinimize(): Promise<void> {
-  await invoke('window:minimize')
+async function handleMinimize(): Promise<void> { await invoke('window:minimize') }
+async function handleMaximize(): Promise<void> { await invoke('window:maximize') }
+async function handleClose(): Promise<void> { await invoke('window:close') }
+function handleDblClick(): void { handleMaximize() }
+
+async function handleOpenSettings(): Promise<void> {
+  const ws = await loadWorkspace()
+  workspacePath.value = ws.workspacePath
+  appSettings.value = ws.settings
+  showSettings.value = true
 }
 
-async function handleMaximize(): Promise<void> {
-  await invoke('window:maximize')
-}
-
-async function handleClose(): Promise<void> {
-  await invoke('window:close')
-}
-
-function handleDblClick(): void {
-  handleMaximize()
+function handleSettingsUpdated(): void {
+  loadWorkspace().then((ws) => {
+    workspacePath.value = ws.workspacePath
+    appSettings.value = ws.settings
+  })
 }
 
 onMounted(async () => {
@@ -31,6 +46,12 @@ onMounted(async () => {
   unsubscribeMaximizeChange = on('window:maximize-change', (maximized: unknown) => {
     isMaximized.value = !!maximized
   })
+
+  try {
+    const ws = await loadWorkspace()
+    workspacePath.value = ws.workspacePath
+    appSettings.value = ws.settings
+  } catch { /* non-critical */ }
 })
 
 onUnmounted(() => {
@@ -44,9 +65,22 @@ onUnmounted(() => {
 <template>
   <div class="title-bar" @dblclick="handleDblClick">
     <div class="title-bar-left">
-      <span class="title-bar-text">Storyboard - 分镜设计</span>
+      <span class="title-bar-logo">🎬</span>
+      <span class="title-bar-text">ShotForge</span>
+      <NButton
+        size="tiny"
+        quaternary
+        circle
+        @click="handleOpenSettings"
+        title="设置"
+        class="settings-btn"
+      >
+        ⚙️
+      </NButton>
     </div>
-    <div class="title-bar-center"></div>
+
+    <div class="title-bar-center" />
+
     <div class="title-bar-controls">
       <div class="window-btn minimize-btn" @click="handleMinimize" title="最小化">
         <svg width="12" height="12" viewBox="0 0 12 12">
@@ -71,6 +105,14 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+
+  <SettingsModal
+    :show="showSettings"
+    :workspace-path="workspacePath"
+    :settings="appSettings"
+    @update:show="showSettings = $event"
+    @updated="handleSettingsUpdated"
+  />
 </template>
 
 <style scoped>
@@ -78,7 +120,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   height: 32px;
-  background: #ffffff;
+  background: #f5f5f7;
   user-select: none;
   -webkit-app-region: drag;
   flex-shrink: 0;
@@ -87,15 +129,30 @@ onUnmounted(() => {
 .title-bar-left {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-left: 16px;
-  min-width: 160px;
+  gap: 6px;
+  padding-left: 12px;
+  -webkit-app-region: no-drag;
+}
+
+.title-bar-logo {
+  font-size: 14px;
+  line-height: 1;
 }
 
 .title-bar-text {
   font-weight: 700;
   font-size: 13px;
   color: #6366f1;
+}
+
+.settings-btn {
+  opacity: 0.45;
+  transition: opacity 0.15s;
+  color: #555;
+}
+
+.settings-btn:hover {
+  opacity: 1;
 }
 
 .title-bar-center {

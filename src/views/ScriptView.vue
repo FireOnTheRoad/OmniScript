@@ -440,7 +440,7 @@ watch(() => projectStore.script, (newScript) => {
 
         <div class="script-content">
           <template v-if="isEditing">
-            <NScrollbar style="max-height: calc(100vh - 128px)">
+            <NScrollbar style="max-height: calc(100vh - 136px)">
               <div class="editing-paragraphs">
                 <div
                   v-for="(para, pIdx) in editingParagraphs"
@@ -483,7 +483,7 @@ watch(() => projectStore.script, (newScript) => {
             </NScrollbar>
           </template>
           <template v-else>
-            <NScrollbar style="max-height: calc(100vh - 128px)">
+            <NScrollbar style="max-height: calc(100vh - 136px)">
               <div class="script-paragraphs">
                 <div class="ai-select-bar" v-if="paragraphs.length > 0">
                   <NCheckbox
