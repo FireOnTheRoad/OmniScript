@@ -11,6 +11,28 @@ export interface AiConfig {
   model: string
 }
 
+export interface ImageGenConfig {
+  apiKey: string
+  size: string
+  promptTemplate: string
+}
+
+export const DEFAULT_IMAGE_CONFIG: ImageGenConfig = {
+  apiKey: '',
+  size: '2848x1600',
+  promptTemplate: `你是一个专业的AI绘画提示词工程师。请将以下视频分镜的画面描述，转化为适合AI生图模型的结构化提示词。
+
+要求：
+1. 输出语言为英文
+2. 描述画面主体、构图、光线、色彩、风格
+3. 加入画质关键词（如 8K, highly detailed, cinematic lighting）
+4. 长度控制在 80~150 词
+5. 仅输出提示词文本，不要任何解释或标签
+
+画面描述：
+{description}`
+}
+
 export interface AiShotField {
   scene: string
   camera: string
@@ -35,6 +57,10 @@ function getConfigPath(workspacePath: string): string {
   return join(workspacePath, 'ai.json')
 }
 
+function getImageConfigPath(workspacePath: string): string {
+  return join(workspacePath, 'ai-image.json')
+}
+
 export async function readAiConfig(workspacePath: string): Promise<AiConfig> {
   const configPath = getConfigPath(workspacePath)
   if (!existsSync(configPath)) {
@@ -54,6 +80,70 @@ export async function readAiConfig(workspacePath: string): Promise<AiConfig> {
 export async function saveAiConfig(workspacePath: string, config: AiConfig): Promise<void> {
   const configPath = getConfigPath(workspacePath)
   await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8')
+}
+
+export async function readImageConfig(workspacePath: string): Promise<ImageGenConfig> {
+  const configPath = getImageConfigPath(workspacePath)
+  if (!existsSync(configPath)) {
+    await writeFile(configPath, JSON.stringify(DEFAULT_IMAGE_CONFIG, null, 2), 'utf-8')
+    return { ...DEFAULT_IMAGE_CONFIG }
+  }
+  const raw = await readFile(configPath, 'utf-8')
+  const parsed = JSON.parse(raw)
+  return {
+    apiKey: parsed.apiKey || '',
+    size: parsed.size || DEFAULT_IMAGE_CONFIG.size,
+    promptTemplate: parsed.promptTemplate || DEFAULT_IMAGE_CONFIG.promptTemplate
+  }
+}
+
+export async function saveImageConfig(workspacePath: string, config: ImageGenConfig): Promise<void> {
+  const configPath = getImageConfigPath(workspacePath)
+  await writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8')
+}
+
+/**
+ * Lightweight chat API call - returns raw text response.
+ * Used for prompt conversion (description → image prompt).
+ */
+export async function callChatApiSimple(
+  config: AiConfig,
+  prompt: string
+): Promise<string> {
+  let body: string
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  }
+
+  if (config.provider === 'anthropic') {
+    headers['x-api-key'] = config.apiKey
+    headers['anthropic-version'] = '2023-06-01'
+    body = JSON.stringify({
+      model: config.model,
+      max_tokens: 512,
+      system: prompt,
+      messages: [{ role: 'user', content: '请按照系统提示词要求生成生图提示词' }]
+    })
+  } else {
+    headers['Authorization'] = `Bearer ${config.apiKey}`
+    body = JSON.stringify({
+      model: config.model,
+      max_tokens: 512,
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: '请按照系统提示词要求生成生图提示词' }
+      ]
+    })
+  }
+
+  const raw = await makeRequest(config.apiUrl, headers, body)
+  const response = JSON.parse(raw)
+
+  if (config.provider === 'anthropic') {
+    return response?.content?.[0]?.text || ''
+  }
+  const msg = response?.choices?.[0]?.message || {}
+  return msg.content || msg.reasoning_content || ''
 }
 
 function parseAiResponse(rawText: string): AiShotField[] {

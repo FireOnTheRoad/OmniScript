@@ -9,7 +9,7 @@ import { useIpc } from '@/composables/useIpc'
 import { useAiAssistant } from '@/composables/useAiAssistant'
 import { usePrompts } from '@/composables/usePrompts'
 import { notify } from '@/utils/notify'
-import type { AppSettings, AiConfig, StoredPrompt } from '@/types'
+import type { AppSettings, AiConfig, StoredPrompt, ImageGenConfig } from '@/types'
 
 const props = defineProps<{
   show: boolean
@@ -143,6 +143,52 @@ async function handleSaveAi(): Promise<void> {
 }
 
 const testingConnection = ref(false)
+
+// ====== Image Gen Config ======
+const imageApiKey = ref('')
+const imageSize = ref('2848x1600')
+const imagePromptTemplate = ref('')
+const imageShowKey = ref(false)
+const imageSaved = ref(false)
+const imageConfigLoaded = ref(false)
+
+const imageSizeOptions = [
+  { label: '2848x1600 (横版)', value: '2848x1600' },
+  { label: '1664x928 (横版小)', value: '1664x928' },
+  { label: '1600x2848 (竖版)', value: '1600x2848' },
+  { label: '928x1664 (竖版小)', value: '928x1664' },
+  { label: '1024x1024 (方形)', value: '1024x1024' }
+]
+
+async function loadImageConfig(): Promise<void> {
+  const config = await invoke<ImageGenConfig | null>('image:get-config')
+  if (config) {
+    imageApiKey.value = config.apiKey
+    imageSize.value = config.size
+    imagePromptTemplate.value = config.promptTemplate
+  }
+  imageConfigLoaded.value = true
+}
+
+async function handleSaveImage(): Promise<void> {
+  if (!imageApiKey.value.trim()) {
+    notify().error('生图 API Key 不能为空')
+    return
+  }
+  const config: ImageGenConfig = {
+    apiKey: imageApiKey.value.trim(),
+    size: imageSize.value,
+    promptTemplate: imagePromptTemplate.value
+  }
+  const result = await invoke<{ success: boolean; error?: string }>('image:save-config', config)
+  if (result.success) {
+    imageSaved.value = true
+    setTimeout(() => { imageSaved.value = false }, 2000)
+    notify().success('生图配置已保存')
+  } else {
+    notify().error(result.error || '保存失败')
+  }
+}
 
 async function handleTestConnection(): Promise<void> {
   if (!aiApiKey.value.trim()) {
@@ -321,6 +367,7 @@ function handleClose(): void {
 
 onMounted(() => {
   loadAiConfig()
+  loadImageConfig()
   loadPrompts()
 })
 </script>
@@ -500,6 +547,56 @@ onMounted(() => {
               />
               <NEmpty v-else description="暂无提示词" style="padding: 20px" />
             </NSpin>
+          </div>
+        </div>
+      </NTabPane>
+
+      <NTabPane name="image" tab="🎨 生图配置">
+        <div class="tab-body">
+          <div class="settings-group">
+            <div class="group-title">🎨 AI 参考图生成</div>
+            <p class="group-desc">配置 AI 生图 API，在分镜表中根据画面描述自动生成参考图</p>
+
+            <NForm label-placement="left" label-width="100" size="small">
+              <NFormItem label="API Key">
+                <NSpace style="width: 100%">
+                  <NInput
+                    v-model:value="imageApiKey"
+                    :type="imageShowKey ? 'text' : 'password'"
+                    placeholder="输入 Ark API Key..."
+                    style="flex: 1"
+                  />
+                  <NButton size="tiny" quaternary @click="imageShowKey = !imageShowKey">
+                    {{ imageShowKey ? '🙈' : '👁' }}
+                  </NButton>
+                </NSpace>
+              </NFormItem>
+              <NFormItem label="图片尺寸">
+                <NSelect
+                  v-model:value="imageSize"
+                  :options="imageSizeOptions"
+                  style="width: 180px"
+                />
+              </NFormItem>
+              <NFormItem label="提示词模板">
+                <NInput
+                  v-model:value="imagePromptTemplate"
+                  type="textarea"
+                  :autosize="{ minRows: 6, maxRows: 12 }"
+                  placeholder="输入生图提示词模板，可用 {description} 作为画面描述占位符…"
+                  style="font-family: monospace; font-size: 12px"
+                />
+              </NFormItem>
+            </NForm>
+
+            <NButton
+              type="primary"
+              size="small"
+              style="margin-top: 8px"
+              @click="handleSaveImage"
+            >
+              {{ imageSaved ? '已保存 ✓' : '保存生图配置' }}
+            </NButton>
           </div>
         </div>
       </NTabPane>

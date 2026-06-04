@@ -2,7 +2,7 @@
 import { ref, computed, h, onMounted, watch, nextTick } from 'vue'
 import {
   NButton, NSpace, NTag, NSelect, NInput, NEmpty, NDataTable,
-  NButtonGroup, NPopconfirm, NModal, NInputNumber
+  NButtonGroup, NPopconfirm, NModal, NInputNumber, NTooltip, NSpin
 } from 'naive-ui'
 import type { DataTableColumns, DataTableRowKey } from 'naive-ui'
 import { useProjectStore } from '@/stores/projectStore'
@@ -10,6 +10,7 @@ import { useSelectionStore } from '@/stores/selectionStore'
 import { useProject } from '@/composables/useProject'
 import { useStoryboard } from '@/composables/useStoryboard'
 import { useIpc } from '@/composables/useIpc'
+import { useImageGen } from '@/composables/useImageGen'
 import { notify } from '@/utils/notify'
 import { useRouter } from 'vue-router'
 import type { Shot } from '@/types'
@@ -18,8 +19,16 @@ const projectStore = useProjectStore()
 const selectionStore = useSelectionStore()
 const { saveProject } = useProject()
 const { deleteShot } = useStoryboard()
-const { invoke } = useIpc()
+const { generateImage } = useImageGen()
+
 const router = useRouter()
+const { invoke } = useIpc()
+
+const generatingShotId = ref<string | null>(null)
+
+function hasDescription(shot: Shot): boolean {
+  return !!shot.description && shot.description !== '（无描述）'
+}
 
 const viewMode = ref<'table' | 'cards'>('table')
 const searchText = ref('')
@@ -75,6 +84,44 @@ async function handleClickImage(shot: Shot): Promise<void> {
 async function handleClickUploadBtn(shot: Shot, event: Event): Promise<void> {
   event.stopPropagation()
   await uploadImageForShot(shot.id)
+}
+
+async function handleGenerateRefImage(shot: Shot): Promise<void> {
+  if (!hasDescription(shot)) {
+    notify().error('请先填写画面描述')
+    return
+  }
+  generatingShotId.value = shot.id
+  try {
+    const result = await invoke<{
+      success: boolean
+      imageDataUrl?: string
+      relPath?: string
+      error?: string
+    }>('image:generate', {
+      description: shot.description,
+      projectPath: projectStore.projectPath,
+      shotId: shot.id
+    })
+
+    if (!result.success) {
+      throw new Error(result.error || '生成失败')
+    }
+
+    if (result.relPath) {
+      projectStore.updateShot(shot.id, { refImage: result.relPath })
+      imageCache.value[result.relPath] = result.imageDataUrl || ''
+      saveProject()
+      notify().success('AI 参考图已生成')
+    } else if (result.imageDataUrl) {
+      // No project path provided, just show the image
+      notify().success('图片已生成（未保存到项目）')
+    }
+  } catch (err) {
+    notify().error('AI 生图失败：' + String(err))
+  } finally {
+    generatingShotId.value = null
+  }
 }
 
 // ====== image preview modal ======
@@ -263,20 +310,42 @@ const shotColumns = computed<DataTableColumns<Shot>>(() => [
     key: 'image',
     width: colWidths.value.image,
     render: (row) => {
+      const isLoading = generatingShotId.value === row.id
       const src = imageCache.value[row.refImage || '']
       if (src) {
-        return h('img', {
-          src,
-          style: 'width:54px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;display:block',
-          onClick: (e: Event) => { e.stopPropagation(); handleClickImage(row) }
-        })
+        return h('div', { style: 'display:flex;flex-direction:column;gap:2px;align-items:center' }, [
+          h('img', {
+            src,
+            style: 'width:54px;height:36px;object-fit:cover;border-radius:4px;cursor:pointer;display:block',
+            onClick: (e: Event) => { e.stopPropagation(); handleClickImage(row) }
+          }),
+          h(NButton, {
+            size: 'tiny',
+            quaternary: true,
+            style: 'font-size:10px',
+            disabled: isLoading,
+            onClick: (e: Event) => { e.stopPropagation(); handleGenerateRefImage(row) }
+          }, { default: () => isLoading ? '生成中…' : '🤖 AI' })
+        ])
       }
-      return h(NButton, {
-        size: 'tiny',
-        quaternary: true,
-        style: 'font-size:11px',
-        onClick: (e: Event) => handleClickUploadBtn(row, e)
-      }, { default: () => '📷 上传' })
+      return h('div', { style: 'display:flex;flex-direction:column;gap:2px;align-items:center' }, [
+        h(NButton, {
+          size: 'tiny',
+          quaternary: true,
+          style: 'font-size:11px',
+          onClick: (e: Event) => handleClickUploadBtn(row, e)
+        }, { default: () => '📷 上传' }),
+        hasDescription(row) ? h(NTooltip, { style: 'max-width:200px' }, {
+          trigger: () => h(NButton, {
+            size: 'tiny',
+            quaternary: true,
+            style: 'font-size:10px',
+            disabled: isLoading,
+            onClick: (e: Event) => { e.stopPropagation(); handleGenerateRefImage(row) }
+          }, { default: () => isLoading ? '⏳' : '🤖 AI' }),
+          default: () => 'AI 生成参考图'
+        }) : null
+      ])
     }
   },
   {

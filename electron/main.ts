@@ -1,6 +1,6 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron'
 import { join } from 'path'
-import { readFile, copyFile, mkdir } from 'fs/promises'
+import { readFile, copyFile, mkdir, writeFile } from 'fs/promises'
 import { existsSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { loadProject, saveProject, checkProjectExists, getProjectPath } from './ipc/project-handlers'
@@ -19,8 +19,13 @@ import {
   saveAiConfig,
   callAiApi,
   testAiConnection,
-  type AiConfig
+  readImageConfig,
+  saveImageConfig,
+  callChatApiSimple,
+  type AiConfig,
+  type ImageGenConfig
 } from './aiService'
+import { generateImage } from './imageService'
 import {
   readAllPrompts,
   savePrompt,
@@ -36,6 +41,22 @@ app.commandLine.appendSwitch('disable-software-rasterizer')
 let mainWindow: BrowserWindow | null = null
 let currentProjectPath: string | null = null
 let workspaceConfig: WorkspaceConfig | null = null
+
+async function saveDataUrlToProject(
+  projectPath: string,
+  shotId: string,
+  dataUrl: string
+): Promise<string> {
+  const match = dataUrl.match(/^data:(.+);base64,(.+)$/)
+  if (!match) throw new Error('无效的 data URL')
+  const buffer = Buffer.from(match[2], 'base64')
+  const assetsDir = join(projectPath, 'assets', shotId)
+  await mkdir(assetsDir, { recursive: true })
+  const filename = `ref-${Date.now()}.png`
+  const filePath = join(assetsDir, filename)
+  await writeFile(filePath, buffer)
+  return join('assets', shotId, filename)
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -375,6 +396,52 @@ function registerIpcHandlers(): void {
       return result
     } catch (err) {
       return { success: false, message: String(err) }
+    }
+  })
+
+  // ====== Image Generation ======
+  ipcMain.handle('image:get-config', async () => {
+    try {
+      return await readImageConfig(workspaceConfig!.workspacePath)
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle('image:save-config', async (_event, config: ImageGenConfig) => {
+    try {
+      await saveImageConfig(workspaceConfig!.workspacePath, config)
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('image:generate', async (_event, payload: { description: string; projectPath?: string; shotId?: string }) => {
+    try {
+      const imgCfg = await readImageConfig(workspaceConfig!.workspacePath)
+      if (!imgCfg.apiKey) {
+        return { success: false, error: '未配置生图 API Key' }
+      }
+
+      // Step 1: Convert description to image prompt using chat AI
+      const promptWithDesc = imgCfg.promptTemplate.replace('{description}', payload.description)
+      const aiCfg = await readAiConfig(workspaceConfig!.workspacePath)
+      const chatResponse = await callChatApiSimple(aiCfg, promptWithDesc)
+      const imagePrompt = chatResponse.trim() || payload.description
+
+      // Step 2: Generate image
+      const imageDataUrl = await generateImage(imagePrompt, imgCfg)
+
+      // Step 3: Save to project assets if paths provided
+      let relPath: string | undefined
+      if (payload.projectPath && payload.shotId) {
+        relPath = await saveDataUrlToProject(payload.projectPath, payload.shotId, imageDataUrl)
+      }
+
+      return { success: true, imageDataUrl, relPath }
+    } catch (err) {
+      return { success: false, error: String(err) }
     }
   })
 

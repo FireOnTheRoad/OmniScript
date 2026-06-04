@@ -111,6 +111,12 @@ export interface AiConfig {
   model: string
 }
 
+export interface ImageGenConfig {
+  apiKey: string
+  size: string
+  promptTemplate: string
+}
+
 export interface AiShotField {
   scene: string
   camera: string

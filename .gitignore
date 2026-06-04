@@ -36,6 +36,7 @@ desktop.ini
 .env.local
 .env.*.local
 ai.json
+ai-image.json
 prompts.json
 
 # ── 项目备份文件 ──
