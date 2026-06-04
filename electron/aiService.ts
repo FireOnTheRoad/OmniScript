@@ -231,7 +231,7 @@ function makeRequest(
   })
 }
 
-export type AiShotMode = 'default' | 'host'
+export type AiShotMode = string
 
 export async function callAiApi(
   config: AiConfig,

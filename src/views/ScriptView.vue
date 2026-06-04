@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import {
   NButton, NSpace, NModal, NInputNumber, NCard, NTag, NSpin, NEmpty, NInput,
-  NForm, NFormItem, NDivider, NPopconfirm, NScrollbar, NCheckbox, NRadioGroup, NRadio
+  NForm, NFormItem, NDivider, NPopconfirm, NScrollbar, NCheckbox, NRadioGroup, NRadio, NSelect
 } from 'naive-ui'
 import { useProjectStore } from '@/stores/projectStore'
 import { useSelectionStore } from '@/stores/selectionStore'
@@ -10,6 +10,7 @@ import { useProject } from '@/composables/useProject'
 import { useStoryboard } from '@/composables/useStoryboard'
 import { useScript } from '@/composables/useScript'
 import { useAiAssistant } from '@/composables/useAiAssistant'
+import { usePrompts } from '@/composables/usePrompts'
 import { notify } from '@/utils/notify'
 import type { Shot, RecentProject } from '@/types'
 
@@ -259,10 +260,12 @@ function handleDeleteShot(shotId: string): void {
 }
 
 const { isConfigValid, generateShots } = useAiAssistant()
+const { listPrompts } = usePrompts()
 
 const showAiConfirm = ref(false)
 const aiLoading = ref(false)
-const aiMode = ref<'default' | 'host'>('default')
+const aiMode = ref('default')
+const aiModeOptions = ref<Array<{ label: string; value: string }>>([])
 
 async function handleAiSplit(): Promise<void> {
   const config = await refreshAiConfig()
@@ -270,6 +273,14 @@ async function handleAiSplit(): Promise<void> {
     notify().info('请先在设置中配置 AI API Key')
     return
   }
+  // Load available prompts for the dropdown
+  try {
+    const prompts = await listPrompts()
+    aiModeOptions.value = prompts.map((p) => ({
+      label: `${p.id.startsWith('builtin-') ? '🔧 ' : '📝 '}${p.name}`,
+      value: p.mode
+    }))
+  } catch { /* keep defaults */ }
   aiSelectedParagraphs.value = new Set()
   showAiConfirm.value = true
 }
@@ -592,10 +603,12 @@ watch(() => projectStore.script, (newScript) => {
           <template v-if="!aiLoading">
             <div style="margin-bottom: 12px">
               <p style="margin-bottom: 6px; font-weight: 600; font-size: 13px">分镜模式</p>
-              <NRadioGroup v-model:value="aiMode" style="display: flex; gap: 12px">
-                <NRadio value="default">🎥 默认（产品/场景展示）</NRadio>
-                <NRadio value="host">🎙️ 真人出镜口播</NRadio>
-              </NRadioGroup>
+              <NSelect
+                v-model:value="aiMode"
+                :options="aiModeOptions"
+                placeholder="选择分镜模式…"
+                style="width: 100%"
+              />
             </div>
             <NDivider style="margin: 10px 0" />
             <p style="margin-bottom: 8px; font-weight: 600">AI 将分析所选段落并自动生成：</p>
@@ -629,7 +642,7 @@ watch(() => projectStore.script, (newScript) => {
           <div class="welcome-content">
             <!-- 标题 -->
             <div class="welcome-hero">
-              <h1 class="welcome-title">🎬 Storyboard</h1>
+              <h1 class="welcome-title">🎬 ShotForge</h1>
               <p class="welcome-subtitle">视频分镜设计桌面工具</p>
               <p class="workspace-info">工作区：{{ workspacePath }}</p>
             </div>

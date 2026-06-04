@@ -382,7 +382,7 @@ function registerIpcHandlers(): void {
       if (!config.apiKey) {
         return { success: false, error: '未配置 API Key' }
       }
-      const mode = (payload.mode === 'host') ? 'host' : 'default'
+      const mode = payload.mode || 'default'
       const shots = await callAiApi(config, payload.script, workspaceConfig!.workspacePath, mode)
       return { success: true, shots }
     } catch (err) {
