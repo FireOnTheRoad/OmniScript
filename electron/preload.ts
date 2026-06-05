@@ -26,6 +26,7 @@ const validInvokeChannels = [
   'project:remove-recent',
   'asset:copy-to-project',
   'asset:read',
+  'asset:save-data-url',
   'ai:get-config',
   'ai:save-config',
   'ai:generate-shots',

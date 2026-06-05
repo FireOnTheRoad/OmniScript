@@ -337,6 +337,15 @@ function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.handle('asset:save-data-url', async (_event, projectPath: string, shotId: string, dataUrl: string) => {
+    try {
+      const relPath = await saveDataUrlToProject(projectPath, shotId, dataUrl)
+      return { success: true, relPath }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
   ipcMain.handle('asset:read', async (_event, projectPath: string, relPath: string) => {
     try {
       const fullPath = join(projectPath, relPath)

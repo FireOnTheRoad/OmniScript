@@ -5,6 +5,7 @@ import {
 } from 'naive-ui'
 import { useProjectStore } from '@/stores/projectStore'
 import { useProject } from '@/composables/useProject'
+import { useIpc } from '@/composables/useIpc'
 import { useRouter } from 'vue-router'
 import type { Shot, ShotScene, ShotCamera, ShotTransition } from '@/types'
 import type { Canvas as FabricCanvas, Rect, Circle, Line, Group, PencilBrush, FabricObject } from 'fabric'
@@ -15,6 +16,7 @@ const props = defineProps<{
 
 const projectStore = useProjectStore()
 const { saveProject } = useProject()
+const { invoke } = useIpc()
 const router = useRouter()
 
 const currentShot = computed<Shot | undefined>(() => {
@@ -115,6 +117,27 @@ async function initCanvas(): Promise<void> {
     brush.color = strokeColor.value
     brush.width = strokeWidth.value
     fabricCanvas.freeDrawingBrush = brush
+    fabricCanvas.isDrawingMode = true
+
+    if (currentShot.value?.refImage && projectStore.projectPath) {
+      try {
+        const result = await invoke<{ success: boolean; dataUrl?: string; error?: string }>(
+          'asset:read',
+          projectStore.projectPath,
+          currentShot.value.refImage
+        )
+        if (result.success && result.dataUrl) {
+          const { FabricImage } = fabric
+          const img = await FabricImage.fromURL(result.dataUrl)
+          img.scaleToWidth(fabricCanvas.getWidth())
+          img.scaleToHeight(fabricCanvas.getHeight())
+          fabricCanvas.add(img)
+          fabricCanvas.requestRenderAll()
+        }
+      } catch (err) {
+        console.error('加载已有绘图失败:', err)
+      }
+    }
 
     setupDrawingEvents(fabricCanvas)
 
@@ -332,9 +355,10 @@ function cleanupCanvas(): void {
   }
 }
 
-function handleSave(): void {
+async function handleSave(): Promise<void> {
   if (!currentShot.value) return
-  projectStore.updateShot(currentShot.value.id, {
+
+  const updates: Partial<Shot> = {
     scene: localScene.value,
     camera: localCamera.value,
     duration: localDuration.value,
@@ -342,7 +366,26 @@ function handleSave(): void {
     description: localDescription.value,
     transition: localTransition.value,
     notes: localNotes.value
-  })
+  }
+
+  if (fabricCanvas && projectStore.projectPath) {
+    const dataUrl = fabricCanvas.toDataURL({ format: 'png', multiplier: 1 })
+    try {
+      const result = await invoke<{ success: boolean; relPath?: string; error?: string }>(
+        'asset:save-data-url',
+        projectStore.projectPath,
+        currentShot.value.id,
+        dataUrl
+      )
+      if (result.success && result.relPath) {
+        updates.refImage = result.relPath
+      }
+    } catch (err) {
+      console.error('保存绘图失败:', err)
+    }
+  }
+
+  projectStore.updateShot(currentShot.value.id, updates)
   saveProject()
 }
 
