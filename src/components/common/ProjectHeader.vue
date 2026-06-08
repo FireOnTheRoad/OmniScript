@@ -5,6 +5,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { useProjectStore } from '@/stores/projectStore'
 import { useExport } from '@/composables/useExport'
 import { useProject } from '@/composables/useProject'
+import { useVideoProject } from '@/composables/useVideoProject'
 import { notify } from '@/utils/notify'
 
 const router = useRouter()
@@ -12,23 +13,31 @@ const route = useRoute()
 const projectStore = useProjectStore()
 const { handleExportPDF, handleExportExcel, hasShots } = useExport()
 const { saveProject } = useProject()
+const { exportMarkdown, exportPlainText, exportTimeline } = useVideoProject()
 const goingHome = ref(false)
 
-const tabs = [
-  { key: 'script', label: '📝 剧本编辑' },
-  { key: 'storyboard', label: '📊 分镜表' },
-  { key: 'shot', label: '✏️ 镜头绘图' }
-]
+const tabs = computed(() => {
+  if (projectStore.projectType === 'video') {
+    return [{ key: 'video', label: '🎬 视频稿件' }]
+  }
+  return [
+    { key: 'script', label: '📝 剧本编辑' },
+    { key: 'storyboard', label: '📊 分镜表' },
+    { key: 'shot', label: '✏️ 镜头绘图' }
+  ]
+})
 
 const activeTab = computed(() => {
   const name = route.name as string
+  if (projectStore.projectType === 'video') return 'video'
   if (name === 'shot-edit') return 'shot'
   if (name === 'storyboard') return 'storyboard'
   return 'script'
 })
 
 function handleTabClick(key: string): void {
-  if (key === 'script') router.push({ name: 'script' })
+  if (key === 'video') router.push({ name: 'video' })
+  else if (key === 'script') router.push({ name: 'script' })
   else if (key === 'storyboard') router.push({ name: 'storyboard' })
   else if (key === 'shot') router.push({ name: 'shot-edit', params: { shotId: 'new' } })
 }
@@ -90,12 +99,25 @@ async function handleGoHome(): Promise<void> {
           <NButton size="tiny" quaternary>📤 导出</NButton>
         </template>
         <NSpace vertical :size="4" style="min-width: 150px;">
-          <NButton size="small" :disabled="!hasShots()" @click="handleExportPDF">
-            📄 导出 PDF 分镜表
-          </NButton>
-          <NButton size="small" :disabled="!hasShots()" @click="handleExportExcel">
-            📊 导出 Excel 数据
-          </NButton>
+          <template v-if="projectStore.isVideoProject">
+            <NButton size="small" @click="exportMarkdown">
+              📄 导出 Markdown
+            </NButton>
+            <NButton size="small" @click="exportPlainText">
+              📝 导出纯文本
+            </NButton>
+            <NButton size="small" @click="exportTimeline">
+              📊 导出时间线 Excel
+            </NButton>
+          </template>
+          <template v-else>
+            <NButton size="small" :disabled="!hasShots()" @click="handleExportPDF">
+              📄 导出 PDF 分镜表
+            </NButton>
+            <NButton size="small" :disabled="!hasShots()" @click="handleExportExcel">
+              📊 导出 Excel 数据
+            </NButton>
+          </template>
         </NSpace>
       </NPopover>
     </div>

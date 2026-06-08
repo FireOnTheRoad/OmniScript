@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, copyFile } from 'fs/promises'
+import { readFile, writeFile, mkdir, copyFile, readdir } from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 
@@ -55,6 +55,7 @@ export async function loadProject(basePath: string): Promise<Record<string, unkn
   const projectJsonPath = join(basePath, 'project.json')
   const scriptPath = join(basePath, 'script.md')
   const storyboardPath = join(basePath, 'storyboard.json')
+  const videoJsonPath = join(basePath, 'video.json')
   const assetsPath = join(basePath, 'assets')
 
   let meta = null
@@ -69,6 +70,9 @@ export async function loadProject(basePath: string): Promise<Record<string, unkn
       }
     }
   }
+
+  // Default projectType to 'script' for backward compat
+  const projectType = (meta as Record<string, unknown>)?.projectType || 'script'
 
   let script = ''
   if (existsSync(scriptPath)) {
@@ -86,11 +90,26 @@ export async function loadProject(basePath: string): Promise<Record<string, unkn
     await mkdir(assetsPath, { recursive: true })
   }
 
+  // Load video data for video projects
+  let video = undefined
+  if (projectType === 'video' && existsSync(videoJsonPath)) {
+    try {
+      const videoRaw = await readFile(videoJsonPath, 'utf-8')
+      const videoData = safeParse<{ clips?: unknown[]; sourceFolder?: string }>(videoRaw, 'video.json')
+      if (videoData) {
+        video = { clips: videoData.clips || [], sourceFolder: videoData.sourceFolder || '', markdown: script }
+      }
+    } catch {
+      // non-critical
+    }
+  }
+
   return {
     meta,
     script,
     storyboard: { shots, totalDuration, shotCount },
-    projectPath: basePath
+    projectPath: basePath,
+    video
   }
 }
 
@@ -123,6 +142,18 @@ export async function saveProject(basePath: string, data: Record<string, unknown
     await writeFile(
       storyboardPath,
       JSON.stringify({ shots: storyboard.shots, totalDuration, shotCount }, null, 2),
+      'utf-8'
+    )
+  }
+
+  // Save video data for video projects
+  const videoData = data.video as { clips: unknown[]; sourceFolder: string } | undefined
+  if (videoData) {
+    const videoJsonPath = join(basePath, 'video.json')
+    await backupBeforeWrite(videoJsonPath)
+    await writeFile(
+      videoJsonPath,
+      JSON.stringify({ clips: videoData.clips, sourceFolder: videoData.sourceFolder }, null, 2),
       'utf-8'
     )
   }

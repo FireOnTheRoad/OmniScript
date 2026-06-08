@@ -27,6 +27,7 @@ const validInvokeChannels = [
   'asset:copy-to-project',
   'asset:read',
   'asset:save-data-url',
+  'video:scan-folder',
   'ai:get-config',
   'ai:save-config',
   'ai:generate-shots',

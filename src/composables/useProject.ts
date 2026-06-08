@@ -2,7 +2,7 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useIpc } from './useIpc'
 import { notify } from '@/utils/notify'
 import router from '@/router'
-import type { ProjectData, RecentProject, AppSettings } from '@/types'
+import type { ProjectData, RecentProject, AppSettings, ProjectType } from '@/types'
 
 function toPlain<T>(data: T): T {
   return JSON.parse(JSON.stringify(data))
@@ -38,6 +38,8 @@ export function useProject() {
       if (result.success && result.data) {
         store.setProject(result.data)
         notify().success(`已打开项目「${result.data.meta?.name || '未命名'}」`)
+        const pType = result.data.meta?.projectType || 'script'
+        router.push({ name: pType === 'video' ? 'video' : 'script' })
         return true
       }
       notify().error(result.error || '打开项目失败')
@@ -48,7 +50,7 @@ export function useProject() {
     }
   }
 
-  async function newProject(name: string, description: string): Promise<boolean> {
+  async function newProject(name: string, description: string, projectType: ProjectType = 'script'): Promise<boolean> {
     if (!name.trim()) {
       notify().error('请输入项目名称')
       return false
@@ -58,11 +60,13 @@ export function useProject() {
       const result = await invoke<{ success: boolean; data?: ProjectData; error?: string }>(
         'project:new',
         name.trim(),
-        description.trim()
+        description.trim(),
+        projectType
       )
       if (result.success && result.data) {
         store.setProject(result.data)
         notify().success(`已创建项目「${name}」`)
+        router.push({ name: projectType === 'video' ? 'video' : 'script' })
         return true
       }
       notify().error(result.error || '创建项目失败')

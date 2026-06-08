@@ -538,7 +538,7 @@ onUnmounted(() => {
               v-model:value="localDialogue"
               type="textarea"
               size="small"
-              :autosize="{ minRows: 2, maxRows: 4 }"
+              :autosize="{ minRows: 2 }"
               placeholder="角色对白或旁白..."
             />
           </div>
@@ -549,7 +549,7 @@ onUnmounted(() => {
               v-model:value="localDescription"
               type="textarea"
               size="small"
-              :autosize="{ minRows: 3, maxRows: 6 }"
+              :autosize="{ minRows: 3 }"
               placeholder="描述画面构图、灯光、人物动作..."
             />
           </div>
@@ -560,7 +560,7 @@ onUnmounted(() => {
               v-model:value="localNotes"
               type="textarea"
               size="small"
-              :autosize="{ minRows: 2, maxRows: 4 }"
+              :autosize="{ minRows: 2 }"
               placeholder="补充说明..."
             />
           </div>

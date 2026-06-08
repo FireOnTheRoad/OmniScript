@@ -12,7 +12,7 @@ import { useScript } from '@/composables/useScript'
 import { useAiAssistant } from '@/composables/useAiAssistant'
 import { usePrompts } from '@/composables/usePrompts'
 import { notify } from '@/utils/notify'
-import type { Shot, RecentProject } from '@/types'
+import type { Shot, RecentProject, ProjectType } from '@/types'
 
 const projectStore = useProjectStore()
 const selectionStore = useSelectionStore()
@@ -34,6 +34,7 @@ const recentProjects = ref<RecentProject[]>([])
 
 const newProjectName = ref('')
 const newProjectDesc = ref('')
+const newProjectType = ref<ProjectType>('script')
 const showNewProjectForm = ref(false)
 const creatingProject = ref(false)
 
@@ -72,11 +73,12 @@ function formatDate(isoStr: string): string {
 async function handleCreateProject(): Promise<void> {
   if (!newProjectName.value.trim()) return
   creatingProject.value = true
-  const success = await newProject(newProjectName.value, newProjectDesc.value)
+  const success = await newProject(newProjectName.value, newProjectDesc.value, newProjectType.value)
   if (success) {
     showNewProjectForm.value = false
     newProjectName.value = ''
     newProjectDesc.value = ''
+    newProjectType.value = 'script'
     refreshWorkspace()
   }
   creatingProject.value = false
@@ -468,7 +470,7 @@ watch(() => projectStore.script, (newScript) => {
                   <NInput
                     v-model:value="editingParagraphs[pIdx]"
                     type="textarea"
-                    :autosize="{ minRows: 2, maxRows: 6 }"
+                    :autosize="{ minRows: 2 }"
                     :placeholder="`第 ${pIdx + 1} 段文案…`"
                     class="editing-para-input"
                   />
@@ -679,6 +681,12 @@ watch(() => projectStore.script, (newScript) => {
                       placeholder="可选：简要描述项目内容、目标风格等"
                       :autosize="{ minRows: 2, maxRows: 4 }"
                     />
+                  </NFormItem>
+                  <NFormItem label="项目类型">
+                    <NRadioGroup v-model:value="newProjectType">
+                      <NRadio value="script">📝 剧本分镜</NRadio>
+                      <NRadio value="video">🎬 视频稿件</NRadio>
+                    </NRadioGroup>
                   </NFormItem>
                   <NSpace>
                     <NButton type="primary" size="medium" :loading="creatingProject" @click="handleCreateProject">创建项目</NButton>

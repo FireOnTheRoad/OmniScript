@@ -10,7 +10,7 @@ export function startWatching(basePath: string, window: BrowserWindow | null): v
   stopWatching()
 
   watcher = watch(
-    [basePath + '/project.json', basePath + '/storyboard.json', basePath + '/script.md'],
+    [basePath + '/project.json', basePath + '/storyboard.json', basePath + '/script.md', basePath + '/video.json'],
     { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 300 } }
   )
 

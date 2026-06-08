@@ -1,7 +1,8 @@
-import { app, BrowserWindow, Menu, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, Menu, ipcMain, dialog, protocol } from 'electron'
 import { join } from 'path'
-import { readFile, copyFile, mkdir, writeFile } from 'fs/promises'
-import { existsSync } from 'fs'
+import { readFile, copyFile, mkdir, writeFile, readdir } from 'fs/promises'
+import { existsSync, createReadStream, statSync } from 'fs'
+import { Readable } from 'stream'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { loadProject, saveProject, checkProjectExists, getProjectPath } from './ipc/project-handlers'
 import { startWatching, stopWatching, markWrite } from './ipc/file-watcher'
@@ -35,8 +36,18 @@ import {
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
 app.commandLine.appendSwitch('no-sandbox')
-app.commandLine.appendSwitch('disable-gpu')
-app.commandLine.appendSwitch('disable-software-rasterizer')
+
+// Register custom protocol for streaming local video files
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'local-video',
+    privileges: {
+      bypassCSP: true,
+      stream: true,
+      supportFetchAPI: true
+    }
+  }
+])
 
 let mainWindow: BrowserWindow | null = null
 let currentProjectPath: string | null = null
@@ -241,7 +252,7 @@ function registerIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('project:new', async (_event, name: string, description: string) => {
+  ipcMain.handle('project:new', async (_event, name: string, description: string, projectType: string = 'script') => {
     try {
       const ws = workspaceConfig!.workspacePath
       await ensureWorkspace(ws)
@@ -261,6 +272,7 @@ function registerIpcHandlers(): void {
           createdAt: new Date().toISOString(),
           modifiedAt: new Date().toISOString(),
           author: '',
+          projectType: projectType || 'script',
           settings: {
             defaultShotDuration: gs.defaultShotDuration,
             frameRate: gs.frameRate,
@@ -270,11 +282,15 @@ function registerIpcHandlers(): void {
         },
         script: '',
         storyboard: { shots: [], totalDuration: 0, shotCount: 0 },
-        projectPath
+        projectPath,
+        video: projectType === 'video'
+          ? { clips: [], sourceFolder: '', markdown: '' }
+          : undefined
       }
 
       markWrite()
       await saveProject(projectPath, initialData)
+
       currentProjectPath = projectPath
       startWatching(projectPath, mainWindow)
 
@@ -362,6 +378,50 @@ function registerIpcHandlers(): void {
       const mime = mimeMap[ext] || 'image/jpeg'
       const base64 = buffer.toString('base64')
       return { success: true, dataUrl: `data:${mime};base64,${base64}` }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('video:scan-folder', async (_event, _projectPath: string) => {
+    try {
+      const result = await dialog.showOpenDialog(mainWindow!, {
+        properties: ['openDirectory'],
+        title: '选择视频素材文件夹'
+      })
+      if (result.canceled || result.filePaths.length === 0) {
+        return { canceled: true }
+      }
+
+      const sourceFolder = result.filePaths[0]
+      const videoExtensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm']
+
+      const files = await readdir(sourceFolder)
+      const videoFiles: string[] = []
+      for (const file of files) {
+        const ext = '.' + (file.split('.').pop()?.toLowerCase() || '')
+        if (videoExtensions.includes(ext)) {
+          videoFiles.push(file)
+        }
+      }
+
+      videoFiles.sort()
+
+      const clips: Array<{ id: string; name: string; path: string; duration: number; width: number; height: number; order: number }> = []
+      let order = 1
+      for (const file of videoFiles) {
+        clips.push({
+          id: `clip-${Date.now()}-${order}`,
+          name: file,
+          path: join(sourceFolder, file),
+          duration: 0,
+          width: 0,
+          height: 0,
+          order: order++
+        })
+      }
+
+      return { success: true, clips, sourceFolder }
     } catch (err) {
       return { success: false, error: String(err) }
     }
@@ -504,6 +564,78 @@ function registerIpcHandlers(): void {
 
 app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.storyboard.app')
+
+  // Handle local-video:// protocol with Range support for <video> streaming
+  protocol.handle('local-video', (request) => {
+    const url = new URL(request.url)
+    // Path is in the pathname (local-video:///path), strip leading slash
+    const filePath = decodeURIComponent(url.pathname.replace(/^\//, ''))
+
+    if (!existsSync(filePath)) {
+      return new Response('Not Found', { status: 404 })
+    }
+
+    const stat = statSync(filePath)
+    const fileSize = stat.size
+    const rangeHeader = request.headers.get('range')
+
+    if (rangeHeader) {
+      let start: number
+      let end: number
+
+      // Suffix range: bytes=-N (last N bytes) — needed for moov-at-end MP4 files
+      const suffixMatch = rangeHeader.match(/^bytes=-(\d+)$/)
+      if (suffixMatch) {
+        const suffixLength = parseInt(suffixMatch[1], 10)
+        start = Math.max(fileSize - suffixLength, 0)
+        end = fileSize - 1
+      } else {
+        // Normal range: bytes=start-end or bytes=start-
+        const match = rangeHeader.match(/bytes=(\d+)-(\d*)/)
+        if (!match) {
+          return new Response('Invalid Range', { status: 416 })
+        }
+        start = parseInt(match[1], 10)
+        end = match[2] ? parseInt(match[2], 10) : fileSize - 1
+      }
+
+      if (start >= fileSize) {
+        return new Response('Range Not Satisfiable', {
+          status: 416,
+          headers: { 'Content-Range': `bytes */${fileSize}` }
+        })
+      }
+
+      end = Math.min(end, fileSize - 1)
+      const chunkSize = end - start + 1
+
+      return new Response(
+        Readable.toWeb(createReadStream(filePath, { start, end })) as ReadableStream,
+        {
+          status: 206,
+          headers: {
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': String(chunkSize),
+            'Content-Type': 'video/mp4'
+          }
+        }
+      )
+    }
+
+    // No range request — return full file
+    return new Response(
+      Readable.toWeb(createReadStream(filePath)) as ReadableStream,
+      {
+        status: 200,
+        headers: {
+          'Accept-Ranges': 'bytes',
+          'Content-Length': String(fileSize),
+          'Content-Type': 'video/mp4'
+        }
+      }
+    )
+  })
 
   workspaceConfig = await loadConfig()
   await ensureWorkspace(workspaceConfig.workspacePath)

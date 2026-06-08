@@ -438,9 +438,11 @@ const shotColumns = computed<DataTableColumns<Shot>>(() => [
           value: row.dialogue,
           placeholder: '输入对白…',
           autofocus: true,
+          type: 'textarea',
+          autosize: { minRows: 1 },
           style: 'width:100%;font-size:12px',
           onBlur: () => { if (row.dialogue) commitText(row.id, 'dialogue', row.dialogue); else endEdit() },
-          onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') { commitText(row.id, 'dialogue', row.dialogue); e.preventDefault() } },
+          onKeydown: (e: KeyboardEvent) => { if (e.ctrlKey && e.key === 'Enter') { commitText(row.id, 'dialogue', row.dialogue); e.preventDefault() } },
           'onUpdate:value': (val: string) => updateField(row.id, 'dialogue', val)
         })
       }
@@ -484,9 +486,11 @@ const shotColumns = computed<DataTableColumns<Shot>>(() => [
           value: row.description,
           placeholder: '输入画面描述…',
           autofocus: true,
+          type: 'textarea',
+          autosize: { minRows: 1 },
           style: 'width:100%;font-size:12px',
           onBlur: () => { if (row.description) commitText(row.id, 'description', row.description); else endEdit() },
-          onKeydown: (e: KeyboardEvent) => { if (e.key === 'Enter') { commitText(row.id, 'description', row.description); e.preventDefault() } },
+          onKeydown: (e: KeyboardEvent) => { if (e.ctrlKey && e.key === 'Enter') { commitText(row.id, 'description', row.description); e.preventDefault() } },
           'onUpdate:value': (val: string) => updateField(row.id, 'description', val)
         })
       }

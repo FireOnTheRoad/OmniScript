@@ -82,6 +82,7 @@ export interface ProjectMeta {
   modifiedAt: string
   author: string
   settings: ProjectSettings
+  projectType: ProjectType
 }
 
 export interface ProjectData {
@@ -89,6 +90,7 @@ export interface ProjectData {
   script: string
   storyboard: StoryboardData
   projectPath: string
+  video?: VideoProjectData
 }
 
 export interface RecentProject {
@@ -132,6 +134,24 @@ export interface StoredPrompt {
   mode: 'default' | 'host'
   content: string
   updatedAt: string
+}
+
+export type ProjectType = 'script' | 'video'
+
+export interface VideoClip {
+  id: string
+  name: string
+  path: string           // 视频文件绝对路径（直接引用源文件，不复制）
+  duration: number
+  width: number
+  height: number
+  order: number
+}
+
+export interface VideoProjectData {
+  clips: VideoClip[]
+  sourceFolder: string
+  markdown: string
 }
 
 export interface WorkspaceConfig {
