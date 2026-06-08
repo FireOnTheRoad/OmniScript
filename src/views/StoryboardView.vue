@@ -18,7 +18,7 @@ import type { Shot } from '@/types'
 const projectStore = useProjectStore()
 const selectionStore = useSelectionStore()
 const { saveProject } = useProject()
-const { deleteShot } = useStoryboard()
+const { deleteShot, mergeShots } = useStoryboard()
 const { generateImage } = useImageGen()
 
 const router = useRouter()
@@ -31,6 +31,7 @@ function hasDescription(shot: Shot): boolean {
 }
 
 const viewMode = ref<'table' | 'cards'>('table')
+const editMode = ref(false)
 const searchText = ref('')
 const sceneFilter = ref<string | undefined>(undefined)
 const cameraFilter = ref<string | undefined>(undefined)
@@ -174,11 +175,11 @@ function attachResizeHandles(): void {
     if (!thead) return
     const ths = thead.querySelectorAll('th')
 
-    const keyOrder = ['image', 'number', 'scene', 'camera', 'duration', 'dialogue', 'transition', 'description', 'actions']
+    const keyOrder = ['selection', 'image', 'number', 'scene', 'camera', 'duration', 'dialogue', 'transition', 'description', 'actions']
 
     ths.forEach((th, i) => {
       const key = keyOrder[i]
-      if (!key || key === 'actions') return
+      if (!key || key === 'actions' || key === 'selection') return
       ;(th as HTMLElement).style.position = 'relative'
 
       const existingHandle = th.querySelector('.col-resize-handle')
@@ -222,6 +223,46 @@ function attachResizeHandles(): void {
 }
 
 // ====== filters ======
+// ====== multi-select & merge ======
+const checkedRowKeys = ref<string[]>([])
+const showMergeModal = ref(false)
+
+const selectedShots = computed<Shot[]>(() =>
+  projectStore.shots.filter((s) => checkedRowKeys.value.includes(s.id))
+)
+
+const mergedPreview = computed(() => {
+  if (selectedShots.value.length < 2) return null
+  const sorted = [...selectedShots.value].sort((a, b) => a.number - b.number)
+  const first = sorted[0]
+  const last = sorted[sorted.length - 1]
+  return {
+    scene: first.scene,
+    camera: first.camera,
+    duration: sorted.reduce((sum, s) => sum + s.duration, 0),
+    dialogue: sorted.map((s) => s.dialogue).filter(Boolean).join('\n') || '（无）',
+    description: sorted.map((s) => s.description).filter(Boolean).join('\n') || '（无）',
+    transition: last.transition,
+    notes: sorted.map((s) => s.notes).filter(Boolean).join('\n') || '（无）'
+  }
+})
+
+function openMergeModal(): void {
+  showMergeModal.value = true
+}
+
+function confirmMerge(): void {
+  mergeShots(checkedRowKeys.value)
+  checkedRowKeys.value = []
+  showMergeModal.value = false
+  saveProject()
+  notify().success('分镜合并完成')
+}
+
+function cancelMerge(): void {
+  showMergeModal.value = false
+}
+
 const sceneOptions = [
   { label: '全部景别', value: undefined },
   { label: '远景', value: '远景' },
@@ -305,6 +346,7 @@ function commitText(shotId: string, field: string, value: string): void {
 
 // ====== columns ======
 const shotColumns = computed<DataTableColumns<Shot>>(() => [
+  ...(editMode.value ? [{ type: 'selection' as const }] : []),
   {
     title: '参考图',
     key: 'image',
@@ -500,11 +542,11 @@ const shotColumns = computed<DataTableColumns<Shot>>(() => [
       }, row.description || '（无描述）')
     }
   },
-  {
+  ...(editMode.value ? [{
     title: '操作',
     key: 'actions',
     width: colWidths.value.actions,
-    render: (row) =>
+    render: (row: Shot) =>
       h(NSpace, { size: 2 }, () => [
         h(NButton, {
           size: 'tiny', quaternary: true,
@@ -517,11 +559,12 @@ const shotColumns = computed<DataTableColumns<Shot>>(() => [
           default: () => '确定删除该镜头？'
         })
       ])
-  }
+  }] : [])
 ])
 
 function handleDelete(shotId: string): void {
   deleteShot(shotId)
+  checkedRowKeys.value = checkedRowKeys.value.filter((k) => k !== shotId)
   saveProject()
 }
 
@@ -545,10 +588,15 @@ watch(
 )
 
 watch(viewMode, async (mode) => {
+  checkedRowKeys.value = []
   if (mode === 'table') {
     await nextTick()
     attachResizeHandles()
   }
+})
+
+watch([sceneFilter, cameraFilter, searchText], () => {
+  checkedRowKeys.value = []
 })
 
 onMounted(async () => {
@@ -574,7 +622,22 @@ onMounted(async () => {
               🖼️ 画廊
             </NButton>
           </NButtonGroup>
+          <NButton
+            size="small"
+            :type="editMode ? 'warning' : 'default'"
+            @click="editMode = !editMode; checkedRowKeys = []"
+          >
+            {{ editMode ? '✕ 退出编辑' : '✏️ 编辑' }}
+          </NButton>
           <span class="shot-count">共 {{ filteredShots.length }} 镜</span>
+          <NButton
+            v-if="editMode && checkedRowKeys.length >= 2"
+            type="warning"
+            size="small"
+            @click="openMergeModal"
+          >
+            🔀 合并 {{ checkedRowKeys.length }} 镜
+          </NButton>
         </div>
         <div class="toolbar-filters">
           <NSelect v-model:value="sceneFilter" :options="sceneOptions" size="small" style="width:110px" placeholder="景别" clearable />
@@ -590,6 +653,8 @@ onMounted(async () => {
             :columns="shotColumns"
             :data="filteredShots"
             :row-key="rowKey"
+            :checked-row-keys="checkedRowKeys"
+            :on-update:checked-row-keys="(keys: DataTableRowKey[]) => checkedRowKeys = keys as string[]"
             size="small"
             :bordered="true"
             :single-line="false"
@@ -608,9 +673,24 @@ onMounted(async () => {
               v-for="shot in filteredShots"
               :key="shot.id"
               class="shot-gallery-card"
-              :class="{ 'card-selected': selectionStore.selectedShotId === shot.id }"
+              :class="{
+                'card-selected': selectionStore.selectedShotId === shot.id,
+                'card-checked': checkedRowKeys.includes(shot.id)
+              }"
               @click="handleEditShot(shot.id)"
             >
+              <div v-if="editMode" class="card-checkbox" @click.stop>
+                <input
+                  type="checkbox"
+                  :checked="checkedRowKeys.includes(shot.id)"
+                  @change="(e: Event) => {
+                    const checked = (e.target as HTMLInputElement).checked
+                    checkedRowKeys = checked
+                      ? [...checkedRowKeys, shot.id]
+                      : checkedRowKeys.filter((k) => k !== shot.id)
+                  }"
+                />
+              </div>
               <div class="card-thumb">
                 <img
                   v-if="imageCache[shot.refImage || '']"
@@ -640,6 +720,70 @@ onMounted(async () => {
         </div>
       </div>
     </template>
+
+    <!-- ====== Merge Confirmation Modal ====== -->
+    <NModal
+      v-model:show="showMergeModal"
+      preset="card"
+      title="🔀 合并分镜"
+      style="width: 640px; max-width: 90vw"
+      :bordered="false"
+      @update:show="cancelMerge"
+    >
+      <div class="merge-body">
+        <div class="merge-source-list">
+          <div class="merge-section-title">待合并镜头（{{ selectedShots.length }} 个）：</div>
+          <div
+            v-for="shot in selectedShots.sort((a, b) => a.number - b.number)"
+            :key="shot.id"
+            class="merge-source-item"
+          >
+            <NTag type="info" size="small">镜{{ shot.number }}</NTag>
+            <span class="merge-source-desc">{{ shot.description?.substring(0, 40) || '（无描述）' }}</span>
+            <span class="merge-source-duration">{{ shot.duration }}s</span>
+          </div>
+        </div>
+
+        <div v-if="mergedPreview" class="merge-result">
+          <div class="merge-section-title">合并结果预览：</div>
+          <div class="merge-result-card">
+            <div class="merge-row">
+              <span class="merge-label">景别</span>
+              <NTag size="small">{{ mergedPreview.scene }}</NTag>
+            </div>
+            <div class="merge-row">
+              <span class="merge-label">运镜</span>
+              <NTag size="small">{{ mergedPreview.camera }}</NTag>
+            </div>
+            <div class="merge-row">
+              <span class="merge-label">总时长</span>
+              <span style="font-weight:600;font-size:14px">{{ mergedPreview.duration }}s</span>
+            </div>
+            <div class="merge-row">
+              <span class="merge-label">转场</span>
+              <NTag size="tiny" type="warning" :bordered="false">{{ mergedPreview.transition }}</NTag>
+            </div>
+            <div class="merge-row">
+              <span class="merge-label">对白/旁白</span>
+              <span class="merge-value">{{ mergedPreview.dialogue }}</span>
+            </div>
+            <div class="merge-row">
+              <span class="merge-label">画面描述</span>
+              <span class="merge-value">{{ mergedPreview.description }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="merge-actions">
+          <NButton type="warning" @click="confirmMerge">
+            ✅ 确认合并
+          </NButton>
+          <NButton @click="cancelMerge">
+            取消
+          </NButton>
+        </div>
+      </div>
+    </NModal>
 
     <!-- ====== Image Preview Modal ====== -->
     <NModal
@@ -789,6 +933,7 @@ onMounted(async () => {
   cursor: pointer;
   transition: all 0.15s;
   background: #fff;
+  position: relative;
 }
 
 .shot-gallery-card:hover {
@@ -799,6 +944,25 @@ onMounted(async () => {
 .shot-gallery-card.card-selected {
   border-color: #6366f1;
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3);
+}
+
+.shot-gallery-card.card-checked {
+  border-color: #f0a020;
+  box-shadow: 0 0 0 2px rgba(240, 160, 32, 0.3);
+}
+
+.card-checkbox {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 10;
+}
+
+.card-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: #f0a020;
 }
 
 .card-thumb {
@@ -895,6 +1059,90 @@ onMounted(async () => {
 
 .preview-actions {
   padding: 8px 0 4px;
+  border-top: 1px solid #e5e7eb;
+}
+
+/* ====== Merge Modal ====== */
+.merge-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.merge-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 8px;
+}
+
+.merge-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.merge-source-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #fafafa;
+  border-radius: 6px;
+  border: 1px solid #eee;
+}
+
+.merge-source-desc {
+  flex: 1;
+  font-size: 12px;
+  color: #666;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.merge-source-duration {
+  font-size: 12px;
+  color: #888;
+  font-family: monospace;
+}
+
+.merge-result-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: #fdf6e3;
+  border-radius: 8px;
+  border: 1px solid #e6d5a8;
+}
+
+.merge-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.merge-label {
+  font-size: 12px;
+  color: #999;
+  min-width: 56px;
+  flex-shrink: 0;
+}
+
+.merge-value {
+  font-size: 13px;
+  color: #444;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.merge-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 8px;
   border-top: 1px solid #e5e7eb;
 }
 </style>

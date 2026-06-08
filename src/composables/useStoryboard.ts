@@ -89,6 +89,46 @@ export function useStoryboard() {
     projectStore.reorderShots(fromIndex, toIndex)
   }
 
+  function mergeShots(shotIds: string[]): Shot | null {
+    if (shotIds.length < 2) return null
+
+    const shotsToMerge = projectStore.shots.filter((s) => shotIds.includes(s.id))
+    if (shotsToMerge.length < 2) return null
+
+    shotsToMerge.sort((a, b) => a.number - b.number)
+    const first = shotsToMerge[0]
+    const last = shotsToMerge[shotsToMerge.length - 1]
+
+    const merged: Shot = {
+      ...first,
+      id: `shot-${Date.now()}-merged`,
+      duration: shotsToMerge.reduce((sum, s) => sum + s.duration, 0),
+      dialogue: shotsToMerge.map((s) => s.dialogue).filter(Boolean).join('\n'),
+      description: shotsToMerge.map((s) => s.description).filter(Boolean).join('\n'),
+      transition: last.transition,
+      notes: shotsToMerge.map((s) => s.notes).filter(Boolean).join('\n'),
+      annotations: first.annotations
+        ? shotsToMerge.reduce(
+            (all, s) => (s.annotations ? [...all, ...s.annotations] : all),
+            [] as NonNullable<typeof first.annotations>
+          )
+        : undefined
+    }
+
+    const insertIndex = projectStore.shots.indexOf(first)
+    projectStore.shots.splice(insertIndex, 0, merged)
+
+    const indices = shotIds
+      .map((id) => projectStore.shots.findIndex((s) => s.id === id))
+      .sort((a, b) => b - a)
+    for (const idx of indices) {
+      if (idx >= 0) projectStore.shots.splice(idx, 1)
+    }
+
+    projectStore.renumberShots()
+    return merged
+  }
+
   return {
     createShot,
     addShotForParagraph,
@@ -96,6 +136,7 @@ export function useStoryboard() {
     smartSplitSelected,
     getShotsForSelectedParagraph,
     deleteShot,
-    moveShot
+    moveShot,
+    mergeShots
   }
 }
