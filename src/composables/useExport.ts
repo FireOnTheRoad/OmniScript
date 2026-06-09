@@ -22,7 +22,7 @@ export function useExport() {
   async function handleExportExcel(): Promise<void> {
     if (!store.meta || store.shots.length === 0) return
 
-    await exportExcel(store.meta.name, store.shots)
+    await exportExcel(store.meta.name, store.shots, store.projectPath)
   }
 
   const hasShots = (): boolean => store.shots.length > 0
