@@ -1,18 +1,25 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { NButton, NSpace, NEmpty } from 'naive-ui'
 import { useProjectStore } from '@/stores/projectStore'
-import { useVideoPlayer } from '@/composables/useVideoPlayer'
 import { useVideoProject } from '@/composables/useVideoProject'
 import { useProject } from '@/composables/useProject'
 import VideoPlayer from '@/components/video/VideoPlayer.vue'
 import MarkdownEditor from '@/components/video/MarkdownEditor.vue'
 import VideoClipBar from '@/components/video/VideoClipBar.vue'
+import type { VideoClip } from '@/types'
 
 const store = useProjectStore()
-const player = useVideoPlayer()
 const videoProject = useVideoProject()
 const { saveProject } = useProject()
+
+// Ref to the VideoPlayer child — we drive seek/load through its exposed API
+// so we share state with the actual <video> element instead of creating a
+// detached useVideoPlayer() instance here.
+const playerRef = ref<{
+  seekTimeline: (totalSeconds: number) => void
+  loadClip: (clip: VideoClip) => void
+} | null>(null)
 
 const currentTimestamp = ref(0)
 
@@ -21,7 +28,7 @@ function handleTimeUpdate(totalSeconds: number): void {
 }
 
 function handleTimestampClick(totalSeconds: number): void {
-  player.seekTimeline(totalSeconds)
+  playerRef.value?.seekTimeline(totalSeconds)
 }
 
 function handleSelectClip(clipId: string): void {
@@ -40,11 +47,23 @@ function handleSave(): void {
   saveProject()
 }
 
+// Total timeline duration for toolbar display (computed from store directly,
+// not from a separate useVideoPlayer instance).
+function formatTime(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+const totalDuration = (): number =>
+  store.videoClips.reduce((sum, c) => sum + c.duration, 0)
+
 watch(() => videoProject.activeClipId.value, (newId) => {
   if (newId && store.videoClips.length > 0) {
     const clip = store.videoClips.find(c => c.id === newId)
     if (clip) {
-      player.loadClip(clip)
+      playerRef.value?.loadClip(clip)
     }
   }
 })
@@ -70,7 +89,7 @@ onMounted(() => {
         </NButton>
       </NSpace>
       <span class="toolbar-info" v-if="store.videoClips.length > 0">
-        {{ store.videoClips.length }} 个片段 · 总时长 {{ player.formatTime(player.totalTimelineDuration.value) }}
+        {{ store.videoClips.length }} 个片段 · 总时长 {{ formatTime(totalDuration()) }}
       </span>
     </div>
 
@@ -80,6 +99,7 @@ onMounted(() => {
         <!-- Left: Video Player -->
         <div class="workspace-left">
           <VideoPlayer
+            ref="playerRef"
             :currentClipId="videoProject.activeClipId.value"
             @timeUpdate="handleTimeUpdate"
           />

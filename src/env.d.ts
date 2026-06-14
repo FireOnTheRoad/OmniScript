@@ -10,6 +10,7 @@ interface ElectronAPI {
   send: (channel: string, ...args: unknown[]) => void
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void
   invoke: (channel: string, ...args: unknown[]) => Promise<unknown>
+  getPathForFile: (file: File) => string
 }
 
 interface Window {

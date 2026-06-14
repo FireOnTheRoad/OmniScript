@@ -4,7 +4,11 @@ import type { VideoClip } from '@/types'
 
 function toLocalVideoUrl(filePath: string): string {
   const normalized = filePath.replace(/\\/g, '/')
-  return `local-video:///${encodeURIComponent(normalized)}`
+  // Encode each path segment separately so the URL parser sees proper "/" separators.
+  // Use an explicit host ("local") because the protocol is registered as `standard`,
+  // which requires a non-empty authority for reliable parsing across Chromium versions.
+  const encoded = normalized.split('/').map(encodeURIComponent).join('/')
+  return `local-video://local/${encoded}`
 }
 
 export function useVideoPlayer() {

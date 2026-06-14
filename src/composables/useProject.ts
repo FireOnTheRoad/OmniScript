@@ -107,6 +107,40 @@ export function useProject() {
     }
   }
 
+  async function scanWorkspace(): Promise<{ added: number; total: number } | null> {
+    try {
+      const result = await invoke<{ success: boolean; added?: number; total?: number; error?: string }>(
+        'workspace:scan'
+      )
+      if (result.success) {
+        return { added: result.added || 0, total: result.total || 0 }
+      }
+      notify().error(result.error || '扫描工作区失败')
+      return null
+    } catch (err) {
+      notify().error(`扫描工作区失败：${String(err)}`)
+      return null
+    }
+  }
+
+  async function importProject(projectPath: string): Promise<boolean> {
+    try {
+      const result = await invoke<{ success: boolean; name?: string; error?: string }>(
+        'project:import',
+        projectPath
+      )
+      if (result.success) {
+        notify().success(`已导入项目「${result.name}」`)
+        return true
+      }
+      notify().error(result.error || '导入项目失败')
+      return false
+    } catch (err) {
+      notify().error(`导入项目失败：${String(err)}`)
+      return false
+    }
+  }
+
   function scheduleAutoSave(): void {
     if (autoSaveTimer) {
       clearTimeout(autoSaveTimer)
@@ -150,6 +184,8 @@ export function useProject() {
     saveProject,
     closeProject,
     removeRecentProject,
+    scanWorkspace,
+    importProject,
     scheduleAutoSave,
     setupFileWatcher,
     setupMenuListeners

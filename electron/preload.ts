@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 const validSendChannels = [
   'menu:new-project',
@@ -18,11 +18,13 @@ const validInvokeChannels = [
   'workspace:get',
   'workspace:set-path',
   'workspace:update-settings',
+  'workspace:scan',
   'dialog:pick-workspace',
   'dialog:pick-image',
   'project:load',
   'project:save',
   'project:new',
+  'project:import',
   'project:remove-recent',
   'asset:copy-to-project',
   'asset:read',
@@ -67,7 +69,11 @@ const api = {
       return ipcRenderer.invoke(channel, ...args)
     }
     return Promise.reject(new Error(`Invalid channel: ${channel}`))
-  }
+  },
+
+  // Resolve a File/folder dropped via DataTransfer to its absolute filesystem
+  // path. Electron 32+ removed File.path, so we expose webUtils explicitly.
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

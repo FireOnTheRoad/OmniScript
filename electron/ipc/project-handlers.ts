@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, copyFile, readdir } from 'fs/promises'
+import { readFile, writeFile, mkdir, copyFile, readdir, stat } from 'fs/promises'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 
@@ -51,6 +51,69 @@ export function getProjectPath(workspacePath: string, projectName: string): stri
   return join(workspacePath, projectName)
 }
 
+/**
+ * Read project.json metadata if the directory looks like a valid project.
+ * Returns null if the directory has no project.json or it's malformed.
+ */
+export async function readProjectMeta(
+  basePath: string
+): Promise<{ name: string; description: string; projectType?: string; createdAt?: string } | null> {
+  const projectJsonPath = join(basePath, 'project.json')
+  if (!existsSync(projectJsonPath)) return null
+  try {
+    const raw = await readFile(projectJsonPath, 'utf-8')
+    const parsed = safeParse<Record<string, unknown>>(raw, 'project.json')
+    if (!parsed) return null
+    return {
+      name: typeof parsed.name === 'string' ? parsed.name : '',
+      description: typeof parsed.description === 'string' ? parsed.description : '',
+      projectType: typeof parsed.projectType === 'string' ? parsed.projectType : undefined,
+      createdAt: typeof parsed.createdAt === 'string' ? parsed.createdAt : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Scan a directory for valid projects (immediate subdirectories with project.json).
+ * Returns metadata for each, with the directory's mtime as a fallback timestamp.
+ */
+export async function scanWorkspaceProjects(workspacePath: string): Promise<
+  Array<{ name: string; description: string; path: string; lastOpenedAt: string }>
+> {
+  if (!existsSync(workspacePath)) return []
+
+  const entries = await readdir(workspacePath, { withFileTypes: true })
+  const projects: Array<{ name: string; description: string; path: string; lastOpenedAt: string }> = []
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const projectDir = join(workspacePath, entry.name)
+    const meta = await readProjectMeta(projectDir)
+    if (!meta) continue
+
+    // mtime gives us a reasonable "last touched" sort key for projects
+    // that have never been opened in this app installation.
+    let lastOpenedAt = meta.createdAt || ''
+    try {
+      const st = await stat(projectDir)
+      lastOpenedAt = new Date(st.mtimeMs).toISOString()
+    } catch {
+      // ignore
+    }
+
+    projects.push({
+      name: meta.name || entry.name,
+      description: meta.description || '',
+      path: projectDir,
+      lastOpenedAt
+    })
+  }
+
+  return projects
+}
+
 export async function loadProject(basePath: string): Promise<Record<string, unknown>> {
   const projectJsonPath = join(basePath, 'project.json')
   const scriptPath = join(basePath, 'script.md')
@@ -95,9 +158,18 @@ export async function loadProject(basePath: string): Promise<Record<string, unkn
   if (projectType === 'video' && existsSync(videoJsonPath)) {
     try {
       const videoRaw = await readFile(videoJsonPath, 'utf-8')
-      const videoData = safeParse<{ clips?: unknown[]; sourceFolder?: string }>(videoRaw, 'video.json')
+      const videoData = safeParse<{ clips?: unknown[]; sourceFolder?: string; markdown?: string }>(
+        videoRaw,
+        'video.json'
+      )
       if (videoData) {
-        video = { clips: videoData.clips || [], sourceFolder: videoData.sourceFolder || '', markdown: script }
+        // Backward compat: older project files stored markdown in script.md instead of video.json
+        const markdown = typeof videoData.markdown === 'string' ? videoData.markdown : script
+        video = {
+          clips: videoData.clips || [],
+          sourceFolder: videoData.sourceFolder || '',
+          markdown
+        }
       }
     } catch {
       // non-critical
@@ -147,13 +219,23 @@ export async function saveProject(basePath: string, data: Record<string, unknown
   }
 
   // Save video data for video projects
-  const videoData = data.video as { clips: unknown[]; sourceFolder: string } | undefined
+  const videoData = data.video as
+    | { clips: unknown[]; sourceFolder: string; markdown?: string }
+    | undefined
   if (videoData) {
     const videoJsonPath = join(basePath, 'video.json')
     await backupBeforeWrite(videoJsonPath)
     await writeFile(
       videoJsonPath,
-      JSON.stringify({ clips: videoData.clips, sourceFolder: videoData.sourceFolder }, null, 2),
+      JSON.stringify(
+        {
+          clips: videoData.clips,
+          sourceFolder: videoData.sourceFolder,
+          markdown: videoData.markdown || ''
+        },
+        null,
+        2
+      ),
       'utf-8'
     )
   }

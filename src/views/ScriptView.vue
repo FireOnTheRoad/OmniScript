@@ -16,7 +16,7 @@ import type { Shot, RecentProject, ProjectType } from '@/types'
 
 const projectStore = useProjectStore()
 const selectionStore = useSelectionStore()
-const { loadWorkspace, openProject, newProject, saveProject, removeRecentProject } = useProject()
+const { loadWorkspace, openProject, newProject, saveProject, removeRecentProject, scanWorkspace, importProject } = useProject()
 const { addShotForParagraph, smartSplitAll, smartSplitSelected, deleteShot } = useStoryboard()
 const { parseParagraphs } = useScript()
 
@@ -37,6 +37,8 @@ const newProjectDesc = ref('')
 const newProjectType = ref<ProjectType>('script')
 const showNewProjectForm = ref(false)
 const creatingProject = ref(false)
+const isDraggingProject = ref(false)
+const scanning = ref(false)
 
 const paragraphs = computed(() => parseParagraphs(editorText.value))
 
@@ -92,6 +94,58 @@ async function handleOpenProject(projectPath: string): Promise<void> {
 async function handleRemoveRecent(projectPath: string): Promise<void> {
   await removeRecentProject(projectPath)
   refreshWorkspace()
+}
+
+async function handleScanWorkspace(): Promise<void> {
+  scanning.value = true
+  const result = await scanWorkspace()
+  scanning.value = false
+  if (result) {
+    if (result.added > 0) {
+      notify().success(`已发现 ${result.added} 个新项目`)
+    } else {
+      notify().info('工作区中没有发现新项目')
+    }
+    refreshWorkspace()
+  }
+}
+
+function handleDragOver(e: DragEvent): void {
+  // Only react when the drag carries files — ignore text/html drags.
+  if (e.dataTransfer?.types.includes('Files')) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    isDraggingProject.value = true
+  }
+}
+
+function handleDragLeave(e: DragEvent): void {
+  // dragleave fires for child elements too — only clear when we leave the
+  // outer drop zone entirely (no relatedTarget inside it).
+  const related = e.relatedTarget as Node | null
+  if (!related || !(e.currentTarget as HTMLElement).contains(related)) {
+    isDraggingProject.value = false
+  }
+}
+
+async function handleDrop(e: DragEvent): Promise<void> {
+  e.preventDefault()
+  isDraggingProject.value = false
+
+  const files = e.dataTransfer?.files
+  if (!files || files.length === 0) return
+
+  const api = window.electronAPI
+  if (!api) return
+
+  let importedAny = false
+  for (let i = 0; i < files.length; i++) {
+    const path = api.getPathForFile(files[i])
+    if (!path) continue
+    const ok = await importProject(path)
+    if (ok) importedAny = true
+  }
+  if (importedAny) refreshWorkspace()
 }
 
 async function refreshWorkspace(): Promise<void> {
@@ -639,7 +693,20 @@ watch(() => projectStore.script, (newScript) => {
 
     <!-- ====== 未打开项目：欢迎页 / 项目管理 ====== -->
     <template v-else>
-      <div class="welcome-page">
+      <div
+        class="welcome-page"
+        :class="{ 'welcome-page--dragging': isDraggingProject }"
+        @dragover="handleDragOver"
+        @dragleave="handleDragLeave"
+        @drop="handleDrop"
+      >
+        <div v-if="isDraggingProject" class="drop-overlay">
+          <div class="drop-overlay-inner">
+            <div class="drop-icon">📂</div>
+            <div class="drop-text">松开鼠标导入项目文件夹</div>
+            <div class="drop-subtext">支持从其他电脑拷贝过来的项目目录</div>
+          </div>
+        </div>
         <NSpin :show="workspaceLoading">
           <div class="welcome-content">
             <!-- 标题 -->
@@ -702,7 +769,18 @@ watch(() => projectStore.script, (newScript) => {
             <div class="section">
               <div class="section-header">
                 <h3>🕐 最近打开的项目</h3>
+                <NButton
+                  size="small"
+                  :loading="scanning"
+                  @click="handleScanWorkspace"
+                  title="扫描工作区目录中是否有新增的项目文件夹"
+                >
+                  🔄 扫描工作区
+                </NButton>
               </div>
+              <p class="section-hint">
+                💡 提示：可将项目文件夹直接拖入本页面以导入（项目可位于任意位置）
+              </p>
 
               <template v-if="recentProjects.length > 0">
                 <div class="recent-list">
@@ -937,6 +1015,57 @@ watch(() => projectStore.script, (newScript) => {
   justify-content: center;
   background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 50%, #faf5ff 100%);
   overflow: auto;
+  position: relative;
+  transition: background 0.2s;
+}
+
+.welcome-page--dragging {
+  background: linear-gradient(135deg, #ddd6fe 0%, #c4b5fd 50%, #ddd6fe 100%);
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 16px;
+  border: 3px dashed #6366f1;
+  border-radius: 16px;
+  background: rgba(238, 242, 255, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  pointer-events: none;
+}
+
+.drop-overlay-inner {
+  text-align: center;
+  color: #4f46e5;
+}
+
+.drop-icon {
+  font-size: 56px;
+  margin-bottom: 12px;
+}
+
+.drop-text {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.drop-subtext {
+  font-size: 13px;
+  color: #6366f1;
+  opacity: 0.8;
+}
+
+.section-hint {
+  font-size: 12px;
+  color: #888;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border-radius: 6px;
+  border-left: 3px solid #6366f1;
 }
 
 .welcome-content {

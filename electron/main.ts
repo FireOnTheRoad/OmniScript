@@ -1,10 +1,10 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, protocol } from 'electron'
-import { join } from 'path'
-import { readFile, copyFile, mkdir, writeFile, readdir } from 'fs/promises'
+import { join, extname } from 'path'
+import { readFile, copyFile, mkdir, writeFile, readdir, stat } from 'fs/promises'
 import { existsSync, createReadStream, statSync } from 'fs'
 import { Readable } from 'stream'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import { loadProject, saveProject, checkProjectExists, getProjectPath } from './ipc/project-handlers'
+import { loadProject, saveProject, checkProjectExists, getProjectPath, readProjectMeta, scanWorkspaceProjects } from './ipc/project-handlers'
 import { startWatching, stopWatching, markWrite } from './ipc/file-watcher'
 import {
   loadConfig,
@@ -38,13 +38,18 @@ app.commandLine.appendSwitch('disable-gpu-sandbox')
 app.commandLine.appendSwitch('no-sandbox')
 
 // Register custom protocol for streaming local video files
+// standard + secure are required for <video> media elements to accept the source
+// in modern Chromium (Electron 30+). Without them, requests are silently rejected.
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'local-video',
     privileges: {
+      standard: true,
+      secure: true,
       bypassCSP: true,
       stream: true,
-      supportFetchAPI: true
+      supportFetchAPI: true,
+      corsEnabled: true
     }
   }
 ])
@@ -178,11 +183,84 @@ function createMenu(): void {
 
 function registerIpcHandlers(): void {
   ipcMain.handle('workspace:get', async () => {
+    // Auto-merge any projects found in the workspace folder that aren't yet
+    // tracked in recentProjects — handles "user copied a project folder in
+    // from another machine" without requiring an explicit Import action.
+    try {
+      const scanned = await scanWorkspaceProjects(workspaceConfig!.workspacePath)
+      const known = new Set(workspaceConfig!.recentProjects.map((p) => p.path))
+      const missing = scanned.filter((p) => !known.has(p.path))
+      if (missing.length > 0) {
+        const merged = [...workspaceConfig!.recentProjects, ...missing]
+        merged.sort((a, b) => (b.lastOpenedAt || '').localeCompare(a.lastOpenedAt || ''))
+        if (merged.length > 20) merged.length = 20
+        workspaceConfig = { ...workspaceConfig!, recentProjects: merged }
+        await saveConfig(workspaceConfig)
+      }
+    } catch (err) {
+      console.error('[workspace:get] scan failed:', String(err))
+    }
+
     return {
       workspacePath: workspaceConfig!.workspacePath,
       recentProjects: workspaceConfig!.recentProjects,
       lastProjectPath: workspaceConfig!.lastProjectPath,
       settings: workspaceConfig!.settings
+    }
+  })
+
+  // Manual rescan (button on welcome page) — same logic as workspace:get's
+  // implicit scan, returned explicitly so the UI can report counts.
+  ipcMain.handle('workspace:scan', async () => {
+    try {
+      const scanned = await scanWorkspaceProjects(workspaceConfig!.workspacePath)
+      const known = new Set(workspaceConfig!.recentProjects.map((p) => p.path))
+      const missing = scanned.filter((p) => !known.has(p.path))
+      if (missing.length > 0) {
+        const merged = [...workspaceConfig!.recentProjects, ...missing]
+        merged.sort((a, b) => (b.lastOpenedAt || '').localeCompare(a.lastOpenedAt || ''))
+        if (merged.length > 20) merged.length = 20
+        workspaceConfig = { ...workspaceConfig!, recentProjects: merged }
+        await saveConfig(workspaceConfig)
+      }
+      return {
+        success: true,
+        added: missing.length,
+        total: workspaceConfig!.recentProjects.length
+      }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  // Import an arbitrary project folder (typically from drag-and-drop).
+  // The folder can live anywhere on disk — we just need a valid project.json
+  // inside it. Adds it to recentProjects without copying anything.
+  ipcMain.handle('project:import', async (_event, projectPath: string) => {
+    try {
+      if (!existsSync(projectPath)) {
+        return { success: false, error: '路径不存在' }
+      }
+      const st = await stat(projectPath)
+      if (!st.isDirectory()) {
+        return { success: false, error: '请拖入项目文件夹（不是单个文件）' }
+      }
+      const meta = await readProjectMeta(projectPath)
+      if (!meta) {
+        return {
+          success: false,
+          error: '该文件夹不是有效的项目（缺少 project.json）'
+        }
+      }
+      workspaceConfig = await addRecentProject(workspaceConfig!, {
+        name: meta.name || '未命名项目',
+        description: meta.description || '',
+        path: projectPath,
+        lastOpenedAt: new Date().toISOString()
+      })
+      return { success: true, name: meta.name || '未命名项目' }
+    } catch (err) {
+      return { success: false, error: String(err) }
     }
   })
 
@@ -566,9 +644,23 @@ app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.storyboard.app')
 
   // Handle local-video:// protocol with Range support for <video> streaming
+  // URL shape: local-video://local/<path-with-encoded-segments>
+  // Each path segment is encodeURIComponent'd on the renderer side.
+  const VIDEO_MIME: Record<string, string> = {
+    '.mp4': 'video/mp4',
+    '.m4v': 'video/mp4',
+    '.mov': 'video/quicktime',
+    '.webm': 'video/webm',
+    '.ogg': 'video/ogg',
+    '.ogv': 'video/ogg',
+    '.mkv': 'video/x-matroska',
+    '.avi': 'video/x-msvideo'
+  }
+
   protocol.handle('local-video', (request) => {
     const url = new URL(request.url)
-    // Path is in the pathname (local-video:///path), strip leading slash
+    // pathname looks like "/F%3A/Hohhot/DJI_0646.MP4" — decoding the whole
+    // string gives back the original Windows path with drive letter.
     const filePath = decodeURIComponent(url.pathname.replace(/^\//, ''))
 
     if (!existsSync(filePath)) {
@@ -577,6 +669,7 @@ app.whenReady().then(async () => {
 
     const stat = statSync(filePath)
     const fileSize = stat.size
+    const contentType = VIDEO_MIME[extname(filePath).toLowerCase()] || 'application/octet-stream'
     const rangeHeader = request.headers.get('range')
 
     if (rangeHeader) {
@@ -617,7 +710,8 @@ app.whenReady().then(async () => {
             'Content-Range': `bytes ${start}-${end}/${fileSize}`,
             'Accept-Ranges': 'bytes',
             'Content-Length': String(chunkSize),
-            'Content-Type': 'video/mp4'
+            'Content-Type': contentType,
+            'Access-Control-Allow-Origin': '*'
           }
         }
       )
@@ -631,7 +725,8 @@ app.whenReady().then(async () => {
         headers: {
           'Accept-Ranges': 'bytes',
           'Content-Length': String(fileSize),
-          'Content-Type': 'video/mp4'
+          'Content-Type': contentType,
+          'Access-Control-Allow-Origin': '*'
         }
       }
     )
